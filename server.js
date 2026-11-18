@@ -276,6 +276,172 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
     handleError(res, err);
   }
 });
+app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
+  const teamId = req.params.id;
+  const leagueId = req.query.league;
+  const season = req.query.season;
+  const last = Number(req.query.last || 10);
+
+  if (!/^t_[A-Za-z0-9]{6}$/.test(teamId)) {
+    return res.status(400).json({ ok: false, error: "ID squadra non valido." });
+  }
+
+  if (!/^l_[A-Za-z0-9]{6}$/.test(leagueId || "")) {
+    return res.status(400).json({ ok: false, error: "ID campionato non valido." });
+  }
+
+  if (!season || !Number.isInteger(last) || last < 1 || last > 10) {
+    return res.status(400).json({
+      ok: false,
+      error: "Stagione o numero di partite non valido. Il massimo è 10."
+    });
+  }
+
+  try {
+    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status: "played"
+    });
+
+    const matches = (leagueData.matches || [])
+      .filter(match =>
+        match.home_team?.id === teamId ||
+        match.away_team?.id === teamId
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, last);
+
+    if (matches.length === 0) {
+      return res.json({
+        ok: true,
+        team_id: teamId,
+        matches_analyzed: 0,
+        message: "Nessuna partita trovata per questa squadra."
+      });
+    }
+
+    const keys = {
+      goals_for: null,
+      goals_against: null,
+      corners: "corners",
+      total_shots: "total_shots",
+      shots_on_target: "ShotsOnTarget",
+      yellow_cards: "yellow_cards",
+      red_cards: "red_cards",
+      fouls: "fouls"
+    };
+
+    const sums = {};
+    const counts = {};
+
+    for (const key of Object.keys(keys)) {
+      sums[key] = 0;
+      counts[key] = 0;
+    }
+
+    let statsMatchesAnalyzed = 0;
+    let teamName = teamId;
+    const matchDetails = [];
+
+    for (const match of matches) {
+      const isHome = match.home_team?.id === teamId;
+
+      teamName = isHome
+        ? match.home_team.name
+        : match.away_team.name;
+
+      const goalsFor = Number(isHome ? match.score_home : match.score_away);
+      const goalsAgainst = Number(isHome ? match.score_away : match.score_home);
+
+      if (Number.isFinite(goalsFor)) {
+        sums.goals_for += goalsFor;
+        counts.goals_for++;
+      }
+
+      if (Number.isFinite(goalsAgainst)) {
+        sums.goals_against += goalsAgainst;
+        counts.goals_against++;
+      }
+
+      matchDetails.push({
+        date: match.date,
+        opponent: isHome ? match.away_team?.name : match.home_team?.name,
+        venue: isHome ? "Casa" : "Trasferta",
+        score: `${match.score_home}-${match.score_away}`
+      });
+
+      try {
+        const stats = await pitchGet(`/v1/matches/${match.id}/stats`);
+        const allPeriod = (stats.periods || []).find(p => p.period === "All");
+
+        if (!allPeriod) continue;
+
+        const found = {};
+
+        for (const group of allPeriod.groups || []) {
+          for (const item of group.items || []) {
+            if (
+              item.key &&
+              Object.values(keys).includes(item.key) &&
+              found[item.key] === undefined
+            ) {
+              found[item.key] = item;
+            }
+          }
+        }
+
+        let hasStats = false;
+
+        for (const [name, statKey] of Object.entries(keys)) {
+          if (!statKey) continue;
+
+          const item = found[statKey];
+          if (!item) continue;
+
+          const rawValue = isHome ? item.home : item.away;
+          const value = parseInt(String(rawValue), 10);
+
+          if (Number.isFinite(value)) {
+            sums[name] += value;
+            counts[name]++;
+            hasStats = true;
+          }
+        }
+
+        if (hasStats) statsMatchesAnalyzed++;
+      } catch (statsError) {
+        // Se mancano le statistiche di una partita, continua con le altre.
+      }
+    }
+
+    const averages = {};
+
+    for (const key of Object.keys(sums)) {
+      averages[key] = counts[key]
+        ? Number((sums[key] / counts[key]).toFixed(2))
+        : null;
+    }
+
+    res.json({
+      ok: true,
+      team: {
+        id: teamId,
+        name: teamName
+      },
+      league_id: leagueId,
+      season,
+      matches_requested: last,
+      matches_analyzed: matches.length,
+      stats_matches_analyzed: statsMatchesAnalyzed,
+      averages,
+      sample_counts: counts,
+      matches: matchDetails
+    });
+
+  } catch (err) {
+    handleError(res, err);
+  }
+});
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
 });
