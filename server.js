@@ -81,20 +81,7 @@ function validMatchId(id) {
   return /^m_[A-Za-z0-9]{6}$/.test(id);
 }
 
-app.get("/", (req, res) => {
-  res.type("html").send(`
-    <!doctype html>
-    <html lang="it">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Football Predictor AI</title>
-    <body style="font-family:system-ui;max-width:680px;margin:40px auto;padding:0 18px">
-    <h1>Football Predictor AI</h1>
-    <p>Server attivo e collegato a PitchAPI.</p>
-    <p><a href="/health">Controllo server</a></p>
-    </body>
-    </html>
-  `);
-});
+app.use(express.static("public"));
 
 app.get("/health", (req, res) => {
   res.json({
