@@ -146,6 +146,16 @@ async function loadMatches(){
    info.className="muted";
    info.textContent=(match.date||date)+" · "+(match.status||"");
    card.append(title,teams,info);
+   const analyzeButton=document.createElement("button");
+   analyzeButton.textContent="ANALIZZA PARTITA";
+   analyzeButton.style.width="100%";
+   analyzeButton.style.marginTop="14px";
+   analyzeButton.onclick=()=>{
+     alert("Partita selezionata: "+home+" - "+away+
+       "\nID partita: "+match.id+
+       "\nProssimo passo: analisi statistica completa.");
+   };
+   card.appendChild(analyzeButton);
    matchesBox.appendChild(card);
   });
  }catch(e){
