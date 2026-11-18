@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080c0a">
+<title>Football Predictor AI</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#080c0a;color:#f4f7f5;font-family:Arial,sans-serif}
+header{padding:22px 18px;background:#101713;border-bottom:1px solid #24352a}
+.logo{color:#42ed83;font-size:22px;font-weight:900}
+header p{color:#89978e;font-size:12px;margin:7px 0 0}
+main{padding:18px;max-width:850px;margin:auto}
+h2{font-size:22px;margin:12px 0}
+.panel{background:#111a14;border:1px solid #26372c;border-radius:14px;padding:16px;margin:16px 0}
+label{display:block;color:#9baa9f;font-size:12px;margin-bottom:8px}
+input{width:100%;background:#080e0a;color:white;border:1px solid #34473a;border-radius:9px;padding:13px;margin-bottom:12px}
+button{background:#37e77c;color:#07120a;border:0;border-radius:9px;padding:13px 17px;font-weight:bold;cursor:pointer}
+button.secondary{background:#26372c;color:#fff}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.status{color:#42ed83;font-size:12px;margin-top:10px}
+.match{background:#111a14;border:1px solid #26372c;border-radius:13px;padding:16px;margin:12px 0}
+.league{color:#42ed83;font-size:11px;text-transform:uppercase;margin-bottom:13px}
+.teams{display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:bold}
+.score{font-size:20px;color:#42ed83}
+.muted{color:#89978e;font-size:12px}
+.empty{color:#89978e;text-align:center;padding:30px}
+nav{position:sticky;bottom:0;background:#101713;border-top:1px solid #26372c;display:flex;justify-content:space-around;padding:14px 4px;color:#42ed83;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+ <div class="logo">⚽ FOOTBALL PREDICTOR AI</div>
+ <p>Analisi calcistica intelligente</p>
+</header>
+
+<main>
+ <div class="panel">
+  <div class="row" style="justify-content:space-between">
+   <strong>Connessione server</strong>
+   <span class="status">● Football Predictor</span>
+  </div>
+  <label style="margin-top:15px">Token di accesso personale</label>
+  <input id="token" type="password" placeholder="Inserisci il tuo access token">
+  <button onclick="saveToken()">Salva accesso</button>
+  <p class="muted">La chiave API PitchAPI rimane protetta sul server.</p>
+ </div>
+
+ <h2>Partite</h2>
+ <div class="panel">
+  <label>Seleziona la data</label>
+  <input type="date" id="date">
+  <div class="row">
+   <button onclick="loadMatches()">Cerca partite</button>
+   <button class="secondary" onclick="checkServer()">Test server</button>
+  </div>
+  <p id="message" class="status">Pronto per caricare le partite.</p>
+ </div>
+
+ <div id="matches">
+  <div class="empty">Le partite appariranno qui.</div>
+ </div>
+</main>
+
+<nav>
+ <span>⌂ Partite</span>
+ <span>◉ Analisi</span>
+ <span>♙ Giocatori</span>
+ <span>★ Preferiti</span>
+</nav>
+
+<script>
+const tokenInput=document.getElementById("token");
+const message=document.getElementById("message");
+const matchesBox=document.getElementById("matches");
+
+tokenInput.value=localStorage.getItem("predictor_token")||"";
+
+document.getElementById("date").value=
+ new Date().toLocaleDateString("en-CA");
+
+function saveToken(){
+ const token=tokenInput.value.trim();
+ if(!token){message.textContent="Inserisci il token.";return;}
+ localStorage.setItem("predictor_token",token);
+ message.textContent="Token salvato sul dispositivo.";
+}
+
+async function api(path){
+ const token=localStorage.getItem("predictor_token");
+ if(!token) throw new Error("Inserisci prima il token di accesso.");
+ const response=await fetch(path,{
+  headers:{"Authorization":"Bearer "+token}
+ });
+ const data=await response.json();
+ if(!response.ok||data.ok===false)
+  throw new Error(data.error||"Errore del server.");
+ return data;
+}
+
+async function checkServer(){
+ message.textContent="Controllo connessione...";
+ try{
+  await api("/api/status");
+  message.textContent="● Server collegato correttamente!";
+ }catch(e){message.textContent=e.message;}
+}
+
+async function loadMatches(){
+ const date=document.getElementById("date").value;
+ if(!date){message.textContent="Seleziona una data.";return;}
+ message.textContent="Caricamento partite...";
+ matchesBox.innerHTML="";
+ try{
+  const data=await api("/api/fixtures?date="+date+"&status=all");
+  const list=data.response||data.fixtures||[];
+  message.textContent="Partite trovate: "+list.length;
+  if(!list.length){
+   matchesBox.innerHTML='<div class="empty">Nessuna partita disponibile per questa data.</div>';
+   return;
+  }
+  list.forEach(match=>{
+   const home=match.home_team?.name||"Casa";
+   const away=match.away_team?.name||"Trasferta";
+   const league=match.league?.name||"Campionato";
+   const score=match.score_home!=null
+    ? match.score_home+" - "+match.score_away
+    : "VS";
+   const card=document.createElement("div");
+   card.className="match";
+   const title=document.createElement("div");
+   title.className="league";
+   title.textContent=league;
+   const teams=document.createElement("div");
+   teams.className="teams";
+   const h=document.createElement("span");
+   h.textContent=home;
+   const s=document.createElement("span");
+   s.className="score";
+   s.textContent=score;
+   const a=document.createElement("span");
+   a.textContent=away;
+   teams.append(h,s,a);
+   const info=document.createElement("p");
+   info.className="muted";
+   info.textContent=(match.date||date)+" · "+(match.status||"");
+   card.append(title,teams,info);
+   matchesBox.appendChild(card);
+  });
+ }catch(e){
+  message.textContent=e.message;
+  matchesBox.innerHTML='<div class="empty">Impossibile caricare le partite.</div>';
+ }
+}
+</script>
+</body>
+</html>
