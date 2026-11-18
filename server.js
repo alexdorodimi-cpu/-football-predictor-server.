@@ -442,6 +442,7 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
     handleError(res, err);
   }
 });
+app.use(express.static("public"));
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
 });
