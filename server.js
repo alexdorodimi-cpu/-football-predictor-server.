@@ -241,7 +241,41 @@ app.use((err, req, res, next) => {
     error: "Errore interno del server."
   });
 });
+app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res) => {
+  const id = req.params.id;
+  const season = req.query.season;
+  const status = req.query.status || "played";
 
+  if (!/^l_[A-Za-z0-9]{6}$/.test(id)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID campionato non valido."
+    });
+  }
+
+  if (!["played", "upcoming", "all"].includes(status)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Stato non valido."
+    });
+  }
+
+  try {
+    const data = await pitchGet(`/v1/leagues/${id}/matches`, {
+      season,
+      status
+    });
+
+    res.json({
+      ok: true,
+      league: data.league,
+      results: data.matches?.length || 0,
+      response: data.matches || []
+    });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
 });
