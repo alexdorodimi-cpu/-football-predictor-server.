@@ -51,6 +51,10 @@ nav{position:sticky;bottom:0;background:#101713;border-top:1px solid #26372c;dis
  <div class="panel">
   <label>Seleziona la data</label>
   <input type="date" id="date">
+  <label>Seleziona il campionato</label>
+<select id="league">
+ <option value="all">Tutti i campionati</option>
+</select>
   <div class="row">
    <button onclick="loadMatches()">Cerca partite</button>
    <button class="secondary" onclick="checkServer()">Test server</button>
@@ -100,11 +104,26 @@ async function api(path){
 }
 
 async function checkServer(){
- message.textContent="Controllo connessione...";
+ message.textContent="Caricamento campionati...";
  try{
-  await api("/api/status");
-  message.textContent="● Server collegato correttamente!";
- }catch(e){message.textContent=e.message;}
+  const data=await api("/api/status");
+  const select=document.getElementById("league");
+
+  select.innerHTML='<option value="all">Tutti i campionati</option>';
+
+  const leagues=data.data?.leagues || [];
+
+  leagues.forEach(league=>{
+   const option=document.createElement("option");
+   option.value=league.id;
+   option.textContent=league.name;
+   select.appendChild(option);
+  });
+
+  message.textContent="● Server collegato! "+leagues.length+" campionati caricati.";
+ }catch(e){
+  message.textContent=e.message;
+ }
 }
 
 async function loadMatches(){
