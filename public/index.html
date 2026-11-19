@@ -29,6 +29,15 @@ button.secondary{background:#26372c;color:#fff}
 nav{position:sticky;bottom:0;background:#101713;border-top:1px solid #26372c;display:flex;justify-content:space-around;padding:14px 4px;color:#42ed83;font-size:12px}
 </style>
 </head>
+ <div id="analysisModal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <button onclick="closeAnalysis()" class="closeModal">✕</button>
+    <h2 id="analysisTitle">Analisi partita</h2>
+    <div id="analysisContent">
+      Caricamento analisi...
+    </div>
+  </div>
+</div>
 <body>
 <header>
  <div class="logo">⚽ FOOTBALL PREDICTOR AI</div>
