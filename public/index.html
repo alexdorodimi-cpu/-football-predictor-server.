@@ -5,75 +5,319 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#080c0a">
 <title>Football Predictor AI</title>
+
 <style>
 *{box-sizing:border-box}
-body{margin:0;background:#080c0a;color:#f4f7f5;font-family:Arial,sans-serif}
-header{padding:22px 18px;background:#101713;border-bottom:1px solid #24352a}
-.logo{color:#42ed83;font-size:22px;font-weight:900}
+
+body{
+ margin:0;
+ background:#080c0a;
+ color:#f4f7f5;
+ font-family:Arial,sans-serif
+}
+
+header{
+ padding:22px 18px;
+ background:#101713;
+ border-bottom:1px solid #24352a
+}
+
+.logo{
+ color:#42ed83;
+ font-size:22px;
+ font-weight:900
+}
+
 header p{color:#89978e;font-size:12px;margin:7px 0 0}
+
 main{padding:18px;max-width:850px;margin:auto}
+
 h2{font-size:22px;margin:12px 0}
-.panel{background:#111a14;border:1px solid #26372c;border-radius:14px;padding:16px;margin:16px 0}
-label{display:block;color:#9baa9f;font-size:12px;margin-bottom:8px}
-input{width:100%;background:#080e0a;color:white;border:1px solid #34473a;border-radius:9px;padding:13px;margin-bottom:12px}
-button{background:#37e77c;color:#07120a;border:0;border-radius:9px;padding:13px 17px;font-weight:bold;cursor:pointer}
+
+.panel{
+ background:#111a14;
+ border:1px solid #26372c;
+ border-radius:14px;
+ padding:16px;
+ margin:16px 0
+}
+
+label{
+ display:block;
+ color:#9baa9f;
+ font-size:12px;
+ margin-bottom:8px
+}
+
+input,select{
+ width:100%;
+ background:#080e0a;
+ color:white;
+ border:1px solid #34473a;
+ border-radius:9px;
+ padding:13px;
+ margin-bottom:12px
+}
+
+button{
+ background:#37e77c;
+ color:#07120a;
+ border:0;
+ border-radius:9px;
+ padding:13px 17px;
+ font-weight:bold;
+ cursor:pointer
+}
+
+button:disabled{opacity:.5;cursor:wait}
+
 button.secondary{background:#26372c;color:#fff}
+
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
 .status{color:#42ed83;font-size:12px;margin-top:10px}
-.match{background:#111a14;border:1px solid #26372c;border-radius:13px;padding:16px;margin:12px 0}
-.league{color:#42ed83;font-size:11px;text-transform:uppercase;margin-bottom:13px}
-.teams{display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:bold}
+
+.match{
+ background:#111a14;
+ border:1px solid #26372c;
+ border-radius:13px;
+ padding:16px;
+ margin:12px 0
+}
+
+.league{
+ color:#42ed83;
+ font-size:11px;
+ text-transform:uppercase;
+ margin-bottom:13px
+}
+
+.teams{
+ display:flex;
+ justify-content:space-between;
+ align-items:center;
+ gap:10px;
+ font-weight:bold
+}
+
 .score{font-size:20px;color:#42ed83}
+
 .muted{color:#89978e;font-size:12px}
+
 .empty{color:#89978e;text-align:center;padding:30px}
-nav{position:sticky;bottom:0;background:#101713;border-top:1px solid #26372c;display:flex;justify-content:space-around;padding:14px 4px;color:#42ed83;font-size:12px}
+
+nav{
+ position:sticky;
+ bottom:0;
+ background:#101713;
+ border-top:1px solid #26372c;
+ display:flex;
+ justify-content:space-around;
+ padding:14px 4px;
+ color:#42ed83;
+ font-size:12px
+}
+
+/* FINESTRA ANALISI */
+
+.modal{
+ position:fixed;
+ inset:0;
+ z-index:9999;
+ background:rgba(0,0,0,.88);
+ display:none;
+ align-items:center;
+ justify-content:center;
+ padding:12px
+}
+
+.modal-content{
+ position:relative;
+ background:#101913;
+ border:1px solid #31513b;
+ border-radius:18px;
+ padding:20px;
+ width:100%;
+ max-width:700px;
+ max-height:90vh;
+ overflow-y:auto;
+ box-shadow:0 15px 50px rgba(0,0,0,.7)
+}
+
+.closeModal{
+ position:absolute;
+ right:14px;
+ top:14px;
+ background:#26372c;
+ color:white;
+ padding:9px 13px;
+ font-size:18px
+}
+
+#analysisTitle{
+ color:#42ed83;
+ font-size:20px;
+ padding-right:45px;
+ margin:5px 0 20px
+}
+
+.teamsCompare{
+ display:grid;
+ grid-template-columns:1fr 1fr;
+ gap:10px;
+ margin-bottom:18px
+}
+
+.teamBox{
+ background:#17251b;
+ border:1px solid #304638;
+ border-radius:12px;
+ padding:13px;
+ text-align:center;
+ min-width:0
+}
+
+.teamBox strong{
+ display:block;
+ color:#42ed83;
+ font-size:15px;
+ overflow-wrap:anywhere
+}
+
+.teamBox small{
+ display:block;
+ color:#89978e;
+ margin-top:6px
+}
+
+.statRow{
+ background:#172019;
+ border:1px solid #283c2d;
+ padding:12px;
+ border-radius:10px;
+ margin:9px 0
+}
+
+.statNames{
+ display:flex;
+ justify-content:space-between;
+ gap:8px;
+ font-size:13px;
+ margin-bottom:9px
+}
+
+.statNames span:first-child,
+.statNames span:last-child{
+ color:#42ed83;
+ font-weight:bold
+}
+
+.statName{
+ text-align:center;
+ color:#c5d1c8;
+ font-size:12px;
+ margin-bottom:9px
+}
+
+.barBackground{
+ height:8px;
+ background:#303b33;
+ border-radius:10px;
+ overflow:hidden;
+ display:flex
+}
+
+.barHome{background:#42ed83;height:100%}
+.barAway{background:#4c9eff;height:100%}
+
+.legend{
+ display:flex;
+ justify-content:center;
+ gap:18px;
+ font-size:11px;
+ color:#aab6ac;
+ margin:14px 0
+}
+
+.legend span{display:flex;align-items:center;gap:5px}
+
+.dot{
+ width:9px;
+ height:9px;
+ border-radius:50%;
+ display:inline-block
+}
+
+.sectionTitle{
+ color:#42ed83;
+ font-size:14px;
+ margin:20px 0 10px
+}
+
+.analysisNote{
+ background:#17251b;
+ border-radius:10px;
+ padding:12px;
+ color:#aebcaf;
+ font-size:12px;
+ line-height:1.5;
+ margin-top:16px
+}
+
+@media(max-width:450px){
+ .modal-content{padding:15px}
+ .teamBox{padding:10px}
+ .teamBox strong{font-size:13px}
+}
 </style>
 </head>
- <div id="analysisModal" class="modal" style="display:none;">
-  <div class="modal-content">
-    <button onclick="closeAnalysis()" class="closeModal">✕</button>
-    <h2 id="analysisTitle">Analisi partita</h2>
-    <div id="analysisContent">
-      Caricamento analisi...
-    </div>
-  </div>
-</div>
+
 <body>
+
 <header>
  <div class="logo">⚽ FOOTBALL PREDICTOR AI</div>
  <p>Analisi calcistica intelligente</p>
 </header>
 
 <main>
+
  <div class="panel">
   <div class="row" style="justify-content:space-between">
    <strong>Connessione server</strong>
    <span class="status">● Football Predictor</span>
   </div>
+
   <label style="margin-top:15px">Token di accesso personale</label>
   <input id="token" type="password" placeholder="Inserisci il tuo access token">
+
   <button onclick="saveToken()">Salva accesso</button>
+
   <p class="muted">La chiave API PitchAPI rimane protetta sul server.</p>
  </div>
 
  <h2>Partite</h2>
+
  <div class="panel">
   <label>Seleziona la data</label>
   <input type="date" id="date">
+
   <label>Seleziona il campionato</label>
-<select id="league">
- <option value="all">Tutti i campionati</option>
-</select>
+  <select id="league">
+   <option value="all">Tutti i campionati</option>
+  </select>
+
   <div class="row">
    <button onclick="loadMatches()">Cerca partite</button>
    <button class="secondary" onclick="checkServer()">Test server</button>
   </div>
+
   <p id="message" class="status">Pronto per caricare le partite.</p>
  </div>
 
  <div id="matches">
   <div class="empty">Le partite appariranno qui.</div>
  </div>
+
 </main>
 
 <nav>
@@ -83,7 +327,24 @@ nav{position:sticky;bottom:0;background:#101713;border-top:1px solid #26372c;dis
  <span>★ Preferiti</span>
 </nav>
 
+<!-- FINESTRA ANALISI -->
+
+<div id="analysisModal" class="modal" onclick="outsideClose(event)">
+ <div class="modal-content">
+
+  <button class="closeModal" onclick="closeAnalysis()">✕</button>
+
+  <h2 id="analysisTitle">Analisi partita</h2>
+
+  <div id="analysisContent">
+   Seleziona una partita per iniziare.
+  </div>
+
+ </div>
+</div>
+
 <script>
+
 const tokenInput=document.getElementById("token");
 const message=document.getElementById("message");
 const matchesBox=document.getElementById("matches");
@@ -95,35 +356,46 @@ document.getElementById("date").value=
 
 function saveToken(){
  const token=tokenInput.value.trim();
- if(!token){message.textContent="Inserisci il token.";return;}
+
+ if(!token){
+  message.textContent="Inserisci il token.";
+  return;
+ }
+
  localStorage.setItem("predictor_token",token);
  message.textContent="Token salvato sul dispositivo.";
 }
 
 async function api(path){
  const token=localStorage.getItem("predictor_token");
+
  if(!token) throw new Error("Inserisci prima il token di accesso.");
+
  const response=await fetch(path,{
   headers:{"Authorization":"Bearer "+token}
  });
+
  const data=await response.json();
+
  if(!response.ok||data.ok===false)
   throw new Error(data.error||"Errore del server.");
+
  return data;
 }
 
 async function checkServer(){
  message.textContent="Caricamento campionati...";
+
  try{
   const result=await api("/api/status");
   const select=document.getElementById("league");
 
   select.innerHTML='<option value="all">Tutti i campionati</option>';
 
-  const leagues =
-   result?.data?.data?.leagues ||
-   result?.data?.leagues ||
-   result?.leagues ||
+  const leagues=
+   result?.data?.data?.leagues||
+   result?.data?.leagues||
+   result?.leagues||
    [];
 
   leagues.sort((a,b)=>{
@@ -140,9 +412,111 @@ async function checkServer(){
   });
 
   message.textContent="● Server collegato! "+leagues.length+" campionati caricati.";
+
  }catch(e){
   message.textContent="Errore: "+e.message;
  }
+}
+
+function closeAnalysis(){
+ document.getElementById("analysisModal").style.display="none";
+}
+
+function outsideClose(event){
+ if(event.target.id==="analysisModal"){
+  closeAnalysis();
+ }
+}
+
+document.addEventListener("keydown",event=>{
+ if(event.key==="Escape") closeAnalysis();
+});
+
+function getNumber(value){
+ if(value===null||value===undefined||value==="") return null;
+ const number=Number(value);
+ return Number.isFinite(number)?number:null;
+}
+
+function displayValue(value){
+ const number=getNumber(value);
+ return number===null?"N/D":number.toFixed(1);
+}
+
+function makeStat(label,homeValue,awayValue){
+ const home=getNumber(homeValue);
+ const away=getNumber(awayValue);
+
+ const max=Math.max(home||0,away||0,1);
+ const homeWidth=home===null?0:(home/max)*100;
+ const awayWidth=away===null?0:(away/max)*100;
+
+ return `
+ <div class="statRow">
+  <div class="statNames">
+   <span>${displayValue(homeValue)}</span>
+   <span>${displayValue(awayValue)}</span>
+  </div>
+  <div class="statName">${label}</div>
+  <div class="barBackground">
+   <div class="barHome" style="width:${homeWidth}%"></div>
+   <div class="barAway" style="width:${awayWidth}%"></div>
+  </div>
+ </div>`;
+}
+
+function renderAnalysis(home,away,homeStats,awayStats){
+ const content=document.getElementById("analysisContent");
+
+ const stats=[
+  ["Gol fatti","goals_for"],
+  ["Gol subiti","goals_against"],
+  ["Corner","corners"],
+  ["Tiri totali","total_shots"],
+  ["Tiri in porta","shots_on_target"],
+  ["Cartellini gialli","yellow_cards"],
+  ["Cartellini rossi","red_cards"],
+  ["Falli","fouls"]
+ ];
+
+ let html=`
+ <div class="teamsCompare">
+  <div class="teamBox">
+   <strong>${home}</strong>
+   <small>Squadra casa</small>
+  </div>
+  <div class="teamBox">
+   <strong>${away}</strong>
+   <small>Squadra ospite</small>
+  </div>
+ </div>
+
+ <div class="legend">
+  <span><i class="dot" style="background:#42ed83"></i>${home}</span>
+  <span><i class="dot" style="background:#4c9eff"></i>${away}</span>
+ </div>
+
+ <div class="sectionTitle">CONFRONTO STATISTICO</div>
+ `;
+
+ stats.forEach(stat=>{
+  html+=makeStat(
+   stat[0],
+   homeStats[stat[1]],
+   awayStats[stat[1]]
+  );
+ });
+
+ html+=`
+ <div class="analysisNote">
+  Dati basati sulle ultime partite analizzate dal server.
+  N/D indica un dato non disponibile.
+  Le barre servono esclusivamente a confrontare le medie:
+  non rappresentano probabilità di vittoria.
+ </div>
+ `;
+
+ content.innerHTML=html;
 }
 
 async function loadMatches(){
@@ -161,7 +535,6 @@ async function loadMatches(){
   const data=await api("/api/fixtures?date="+date+"&status=all");
   let list=data.response||data.fixtures||[];
 
-  // Se è stato scelto un campionato, filtra le partite
   if(selectedLeague!=="all"){
    list=list.filter(match=>{
     return match.league?.id===selectedLeague;
@@ -179,6 +552,7 @@ async function loadMatches(){
    const home=match.home_team?.name||"Casa";
    const away=match.away_team?.name||"Trasferta";
    const league=match.league?.name||"Campionato";
+
    const score=match.score_home!=null
     ? match.score_home+" - "+match.score_away
     : "VS";
@@ -216,58 +590,57 @@ async function loadMatches(){
    analyzeButton.style.width="100%";
    analyzeButton.style.marginTop="14px";
 
-  analyzeButton.onclick=async()=>{
- try{
-  const leagueId=match.league?.id;
-  const season=match.season||"2026/2027";
-  const homeId=match.home_team?.id;
-  const awayId=match.away_team?.id;
+   analyzeButton.onclick=async()=>{
+    const leagueId=match.league?.id;
+    const season=match.season||"2026/2027";
+    const homeId=match.home_team?.id;
+    const awayId=match.away_team?.id;
 
-  if(!leagueId||!homeId||!awayId){
-   alert("Dati della partita incompleti.");
-   return;
-  }
+    if(!leagueId||!homeId||!awayId){
+     alert("Dati della partita incompleti.");
+     return;
+    }
 
-  analyzeButton.disabled=true;
-  analyzeButton.textContent="ANALISI IN CORSO...";
+    const modal=document.getElementById("analysisModal");
+    const content=document.getElementById("analysisContent");
 
-  const urlHome="/api/team/"+homeId+"/averages?league="+
-   leagueId+"&season="+encodeURIComponent(season)+"&last=10";
+    document.getElementById("analysisTitle").textContent=
+     home+" - "+away;
 
-  const urlAway="/api/team/"+awayId+"/averages?league="+
-   leagueId+"&season="+encodeURIComponent(season)+"&last=10";
+    content.innerHTML=
+     '<div class="empty">⏳ Analisi delle ultime 10 partite in corso...</div>';
 
-  const results=await Promise.all([
-   api(urlHome),
-   api(urlAway)
-  ]);
+    modal.style.display="flex";
 
- const homeStats=results[0]?.averages||{};
-const awayStats=results[1]?.averages||{};
+    analyzeButton.disabled=true;
+    analyzeButton.textContent="ANALISI IN CORSO...";
 
-alert(
- "CONFRONTO STATISTICO\n\n"+
- home+"\n"+
- "Gol fatti: "+homeStats.goals_for+
- "\nGol subiti: "+homeStats.goals_against+
- "\nCorner: "+homeStats.corners+
- "\nTiri: "+homeStats.total_shots+
- "\nTiri in porta: "+homeStats.shots_on_target+
- "\n\n"+away+"\n"+
- "Gol fatti: "+awayStats.goals_for+
- "\nGol subiti: "+awayStats.goals_against+
- "\nCorner: "+awayStats.corners+
- "\nTiri: "+awayStats.total_shots+
- "\nTiri in porta: "+awayStats.shots_on_target
-);
+    try{
+     const urlHome="/api/team/"+homeId+"/averages?league="+
+      leagueId+"&season="+encodeURIComponent(season)+"&last=10";
 
- }catch(e){
-  alert("Errore durante l'analisi: "+e.message);
- }finally{
-  analyzeButton.disabled=false;
-  analyzeButton.textContent="ANALIZZA PARTITA";
- }
-};
+     const urlAway="/api/team/"+awayId+"/averages?league="+
+      leagueId+"&season="+encodeURIComponent(season)+"&last=10";
+
+     const results=await Promise.all([
+      api(urlHome),
+      api(urlAway)
+     ]);
+
+     const homeStats=results[0]?.averages||{};
+     const awayStats=results[1]?.averages||{};
+
+     renderAnalysis(home,away,homeStats,awayStats);
+
+    }catch(e){
+     content.innerHTML=
+      '<div class="empty">Errore durante l’analisi: '+
+      e.message+'</div>';
+    }finally{
+     analyzeButton.disabled=false;
+     analyzeButton.textContent="ANALIZZA PARTITA";
+    }
+   };
 
    card.appendChild(analyzeButton);
    matchesBox.appendChild(card);
@@ -275,10 +648,12 @@ alert(
 
  }catch(e){
   message.textContent=e.message;
-  matchesBox.innerHTML='<div class="empty">Impossibile caricare le partite.</div>';
+  matchesBox.innerHTML=
+   '<div class="empty">Impossibile caricare le partite.</div>';
  }
 }
 
 </script>
+
 </body>
 </html>
