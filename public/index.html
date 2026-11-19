@@ -138,17 +138,34 @@ async function checkServer(){
 
 async function loadMatches(){
  const date=document.getElementById("date").value;
- if(!date){message.textContent="Seleziona una data.";return;}
+ const selectedLeague=document.getElementById("league").value;
+
+ if(!date){
+  message.textContent="Seleziona una data.";
+  return;
+ }
+
  message.textContent="Caricamento partite...";
  matchesBox.innerHTML="";
+
  try{
   const data=await api("/api/fixtures?date="+date+"&status=all");
-  const list=data.response||data.fixtures||[];
+  let list=data.response||data.fixtures||[];
+
+  // Se è stato scelto un campionato, filtra le partite
+  if(selectedLeague!=="all"){
+   list=list.filter(match=>{
+    return match.league?.id===selectedLeague;
+   });
+  }
+
   message.textContent="Partite trovate: "+list.length;
+
   if(!list.length){
-   matchesBox.innerHTML='<div class="empty">Nessuna partita disponibile per questa data.</div>';
+   matchesBox.innerHTML='<div class="empty">Nessuna partita disponibile per questo campionato nella data selezionata.</div>';
    return;
   }
+
   list.forEach(match=>{
    const home=match.home_team?.name||"Casa";
    const away=match.away_team?.name||"Trasferta";
@@ -156,37 +173,50 @@ async function loadMatches(){
    const score=match.score_home!=null
     ? match.score_home+" - "+match.score_away
     : "VS";
+
    const card=document.createElement("div");
    card.className="match";
+
    const title=document.createElement("div");
    title.className="league";
    title.textContent=league;
+
    const teams=document.createElement("div");
    teams.className="teams";
+
    const h=document.createElement("span");
    h.textContent=home;
+
    const s=document.createElement("span");
    s.className="score";
    s.textContent=score;
+
    const a=document.createElement("span");
    a.textContent=away;
+
    teams.append(h,s,a);
+
    const info=document.createElement("p");
    info.className="muted";
    info.textContent=(match.date||date)+" · "+(match.status||"");
+
    card.append(title,teams,info);
+
    const analyzeButton=document.createElement("button");
    analyzeButton.textContent="ANALIZZA PARTITA";
    analyzeButton.style.width="100%";
    analyzeButton.style.marginTop="14px";
+
    analyzeButton.onclick=()=>{
-     alert("Partita selezionata: "+home+" - "+away+
-       "\nID partita: "+match.id+
-       "\nProssimo passo: analisi statistica completa.");
+    alert("Partita selezionata: "+home+" - "+away+
+     "\nID partita: "+match.id+
+     "\nProssimo passo: analisi statistica completa.");
    };
+
    card.appendChild(analyzeButton);
    matchesBox.appendChild(card);
   });
+
  }catch(e){
   message.textContent=e.message;
   matchesBox.innerHTML='<div class="empty">Impossibile caricare le partite.</div>';
