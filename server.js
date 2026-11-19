@@ -1,3 +1,4 @@
+
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 
@@ -10,6 +11,14 @@ const PORT = process.env.PORT || 10000;
 const API_KEY = process.env.PITCHAPI_KEY;
 const ACCESS_TOKEN = process.env.PREDICTOR_ACCESS_TOKEN;
 const API_BASE = "https://api.pitchapi.dev";
+
+// TEST TEMPORANEO CONFIGURAZIONE
+app.get("/debug-config", (req, res) => {
+  res.json({
+    pitchapi_key_present: Boolean(API_KEY),
+    access_token_present: Boolean(ACCESS_TOKEN)
+  });
+});
 
 app.use("/api/", rateLimit({
   windowMs: 60 * 1000,
@@ -221,13 +230,7 @@ app.get(
   }
 );
 
-app.use((err, req, res, next) => {
-  console.error("Errore server:", err.message);
-  res.status(500).json({
-    ok: false,
-    error: "Errore interno del server."
-  });
-});
+// Campionati e relative partite
 app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res) => {
   const id = req.params.id;
   const season = req.query.season;
@@ -263,6 +266,8 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
     handleError(res, err);
   }
 });
+
+// Medie statistiche delle squadre
 app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
   const teamId = req.params.id;
   const leagueId = req.query.league;
@@ -429,7 +434,18 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
     handleError(res, err);
   }
 });
+
+// Gestione errori
+app.use((err, req, res, next) => {
+  console.error("Errore server:", err.message);
+  res.status(500).json({
+    ok: false,
+    error: "Errore interno del server."
+  });
+});
+
 app.use(express.static("public"));
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
 });
