@@ -207,11 +207,44 @@ async function loadMatches(){
    analyzeButton.style.width="100%";
    analyzeButton.style.marginTop="14px";
 
-   analyzeButton.onclick=()=>{
-    alert("Partita selezionata: "+home+" - "+away+
-     "\nID partita: "+match.id+
-     "\nProssimo passo: analisi statistica completa.");
-   };
+  analyzeButton.onclick=async()=>{
+ try{
+  const leagueId=match.league?.id;
+  const season=match.season||"2026/2027";
+  const homeId=match.home_team?.id;
+  const awayId=match.away_team?.id;
+
+  if(!leagueId||!homeId||!awayId){
+   alert("Dati della partita incompleti.");
+   return;
+  }
+
+  analyzeButton.disabled=true;
+  analyzeButton.textContent="ANALISI IN CORSO...";
+
+  const urlHome="/api/team/"+homeId+"/averages?league="+
+   leagueId+"&season="+encodeURIComponent(season)+"&last=10";
+
+  const urlAway="/api/team/"+awayId+"/averages?league="+
+   leagueId+"&season="+encodeURIComponent(season)+"&last=10";
+
+  const results=await Promise.all([
+   api(urlHome),
+   api(urlAway)
+  ]);
+
+  alert("Analisi recuperata!\n\n"+home+
+   "\n"+JSON.stringify(results[0],null,2)+
+   "\n\n"+away+
+   "\n"+JSON.stringify(results[1],null,2));
+
+ }catch(e){
+  alert("Errore durante l'analisi: "+e.message);
+ }finally{
+  analyzeButton.disabled=false;
+  analyzeButton.textContent="ANALIZZA PARTITA";
+ }
+};
 
    card.appendChild(analyzeButton);
    matchesBox.appendChild(card);
