@@ -233,10 +233,24 @@ async function loadMatches(){
    api(urlAway)
   ]);
 
-  alert("Analisi recuperata!\n\n"+home+
-   "\n"+JSON.stringify(results[0],null,2)+
-   "\n\n"+away+
-   "\n"+JSON.stringify(results[1],null,2));
+ const homeStats=results[0]?.averages||{};
+const awayStats=results[1]?.averages||{};
+
+alert(
+ "CONFRONTO STATISTICO\n\n"+
+ home+"\n"+
+ "Gol fatti: "+homeStats.goals_for+
+ "\nGol subiti: "+homeStats.goals_against+
+ "\nCorner: "+homeStats.corners+
+ "\nTiri: "+homeStats.total_shots+
+ "\nTiri in porta: "+homeStats.shots_on_target+
+ "\n\n"+away+"\n"+
+ "Gol fatti: "+awayStats.goals_for+
+ "\nGol subiti: "+awayStats.goals_against+
+ "\nCorner: "+awayStats.corners+
+ "\nTiri: "+awayStats.total_shots+
+ "\nTiri in porta: "+awayStats.shots_on_target
+);
 
  }catch(e){
   alert("Errore durante l'analisi: "+e.message);
