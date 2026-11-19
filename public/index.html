@@ -111,18 +111,22 @@ async function checkServer(){
 
   select.innerHTML='<option value="all">Tutti i campionati</option>';
 
-  const leagues=result.data?.data?.leagues || result.data?.leagues || [];
+  const leagues =
+   result?.data?.data?.leagues ||
+   result?.data?.leagues ||
+   result?.leagues ||
+   [];
 
   leagues.sort((a,b)=>{
-   const nameA=(a.name+" "+a.country_code).toLowerCase();
-   const nameB=(b.name+" "+b.country_code).toLowerCase();
+   const nameA=(a.name+" "+(a.country_code||"")).toLowerCase();
+   const nameB=(b.name+" "+(b.country_code||"")).toLowerCase();
    return nameA.localeCompare(nameB);
   });
 
   leagues.forEach(league=>{
    const option=document.createElement("option");
    option.value=league.id;
-   option.textContent=league.name+" ("+league.country_code+")";
+   option.textContent=league.name+" ("+(league.country_code||"")+")";
    select.appendChild(option);
   });
 
