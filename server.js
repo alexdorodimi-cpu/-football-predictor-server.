@@ -468,7 +468,7 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
     const keys = {
       corners: ["corners"],
       total_shots: ["total_shots"],
-      shots_on_target: ["ShotsOnTarget", "shots_on_target"],
+      shots_on_target: ["ShotsOnTarget", "shots_on_target", "shots_on_goal"],
       yellow_cards: ["yellow_cards"],
       red_cards: ["red_cards"],
       fouls: ["fouls"],
