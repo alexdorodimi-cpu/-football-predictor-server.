@@ -517,7 +517,7 @@ function weightedAverage(sample, key) {
   let totalWeight = 0;
 
   sample.forEach((item, index) => {
-    const weight = Math.pow(0.85, index);
+    const weight = Math.pow(0.75, index);
 
     weightedSum += item[key] * weight;
     totalWeight += weight;
