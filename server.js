@@ -320,36 +320,14 @@ const awayGoalsFor = weightedAverage(awaySample, "scored");
 const awayGoalsAgainst = weightedAverage(awaySample, "conceded");
 
 // Separazione delle partite in casa e in trasferta
-const homeAtHome = homeSample.filter(item => item.wasHome);
-const awayAway = awaySample.filter(item => !item.wasHome);
-
-// Attacco e difesa della squadra di casa
-const homeAttack = homeAtHome.length >= 3
-  ? weightedAverage(homeAtHome, "scored")
-  : homeGoalsFor;
-
-const homeDefense = homeAtHome.length >= 3
-  ? weightedAverage(homeAtHome, "conceded")
-  : homeGoalsAgainst;
-
-// Attacco e difesa della squadra in trasferta
-const awayAttack = awayAway.length >= 3
-  ? weightedAverage(awayAway, "scored")
-  : awayGoalsFor;
-
-const awayDefense = awayAway.length >= 3
-  ? weightedAverage(awayAway, "conceded")
-  : awayGoalsAgainst;
-
-// Stima dei gol con fattore campo
 const expectedHomeGoals = Math.max(
   0.10,
-  Math.min(5, (homeAttack + awayDefense) / 2)
+  Math.min(5, (homeGoalsFor + awayGoalsAgainst) / 2)
 );
 
 const expectedAwayGoals = Math.max(
   0.10,
-  Math.min(5, (awayAttack + homeDefense) / 2)
+  Math.min(5, (awayGoalsFor + homeGoalsAgainst) / 2)
 );
 
     const matrix = buildGoalModel(expectedHomeGoals, expectedAwayGoals);
@@ -608,38 +586,15 @@ const awayFor = weightedAverage(awaySample, "scored");
 const awayAgainst = weightedAverage(awaySample, "conceded");
 
 // Separazione casa e trasferta
-const homeAtHome = homeSample.filter(item => item.wasHome);
-const awayAway = awaySample.filter(item => !item.wasHome);
-
-// Attacco e difesa della squadra di casa
-const homeAttack = homeAtHome.length >= 3
-  ? weightedAverage(homeAtHome, "scored")
-  : homeFor;
-
-const homeDefense = homeAtHome.length >= 3
-  ? weightedAverage(homeAtHome, "conceded")
-  : homeAgainst;
-
-// Attacco e difesa della squadra ospite
-const awayAttack = awayAway.length >= 3
-  ? weightedAverage(awayAway, "scored")
-  : awayFor;
-
-const awayDefense = awayAway.length >= 3
-  ? weightedAverage(awayAway, "conceded")
-  : awayAgainst;
-
-// Gol attesi con fattore campo
 const homeLambda = Math.max(
   0.10,
-  Math.min(5, (homeAttack + awayDefense) / 2)
+  Math.min(5, (homeFor + awayAgainst) / 2)
 );
 
 const awayLambda = Math.max(
   0.10,
-  Math.min(5, (awayAttack + homeDefense) / 2)
+  Math.min(5, (awayFor + homeAgainst) / 2)
 );
-
 
       const matrix = buildGoalModel(homeLambda, awayLambda);
 
