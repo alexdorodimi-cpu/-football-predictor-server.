@@ -79,6 +79,30 @@ app.get("/api/test-database", requireConfig, requireAccess, async (req, res) => 
     });
   }
 });
+// SALVATAGGIO PARTITE SU SUPABASE
+async function saveMatchToDatabase(match) {
+  const { error } = await supabase
+    .from("matches")
+    .upsert({
+      id: String(match.id),
+      league_id: String(match.league_id),
+      league_name: match.league_name || null,
+      season: String(match.season),
+      home_team: match.home_team,
+      away_team: match.away_team,
+      match_date: match.date || null,
+      home_goals: match.home_goals ?? null,
+      away_goals: match.away_goals ?? null,
+      status: match.status || null
+    });
+
+  if (error) {
+    console.error("Errore salvataggio partita:", error.message);
+    throw error;
+  }
+
+  return true;
+}
 
 
 async function pitchGet(path, params = {}) {
@@ -498,6 +522,7 @@ app.get("/api/fixture/:id/odds", requireConfig, requireAccess, (req, res) => {
 });
 
 // CAMPIONATI E PARTITE
+
 app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res) => {
   const leagueId = req.params.id;
   const season = req.query.season;
@@ -523,17 +548,58 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
       status
     });
 
+    const matches = data.matches || [];
+    let savedMatches = 0;
+    let skippedMatches = 0;
+
+    for (const match of matches) {
+      const homeTeam = typeof match.home_team === "string"
+        ? match.home_team
+        : match.home_team?.name;
+
+      const awayTeam = typeof match.away_team === "string"
+        ? match.away_team
+        : match.away_team?.name;
+
+      if (!match.id || !homeTeam || !awayTeam) {
+        skippedMatches++;
+        continue;
+      }
+
+      await saveMatchToDatabase({
+        id: match.id,
+        league_id: match.league?.id || leagueId,
+        league_name:
+          match.league?.name ||
+          data.league?.name ||
+          (typeof data.league === "string" ? data.league : null),
+        season,
+        home_team: homeTeam,
+        away_team: awayTeam,
+        date: match.date || match.time_utc || null,
+        home_goals: match.score_home ?? match.home_goals ?? null,
+        away_goals: match.score_away ?? match.away_goals ?? null,
+        status: match.status || null
+      });
+
+      savedMatches++;
+    }
+
     res.json({
       ok: true,
       league_id: leagueId,
       season,
-      requested_matches: data.matches?.length || 0,
-      matches: data.matches || []
+      requested_matches: matches.length,
+      saved_matches: savedMatches,
+      skipped_matches: skippedMatches,
+      matches
     });
+
   } catch (err) {
     handleError(res, err);
   }
 });
+
 
 // BACKTEST DEL MODELLO
 app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res) => {
