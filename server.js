@@ -262,11 +262,15 @@ app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req
       season,
       status: "played"
     });
-
     const playedMatches = (leagueData.matches || [])
-      .filter(match => match.status === "finished" || match.status === "completed" ||
-        (getMatchScore(match, true) !== null && getMatchScore(match, false) !== null))
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  .filter(match =>
+    (match.status === "finished" ||
+     match.status === "completed" ||
+     (getMatchScore(match, true) !== null &&
+      getMatchScore(match, false) !== null)) &&
+    match.date < fixture.date
+  )
+  .sort((a, b) => new Date(b.date) - new Date(a.date));
 
     function getTeamSample(teamId) {
       return playedMatches
