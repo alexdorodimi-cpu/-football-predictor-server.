@@ -268,24 +268,32 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
 });
 
 // Medie statistiche delle squadre
-app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
+
+// STATISTICHE INDIVIDUALI DEI GIOCATORI
+app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (req, res) => {
   const teamId = req.params.id;
   const leagueId = req.query.league;
   const season = req.query.season;
   const last = Number(req.query.last || 10);
 
   if (!/^t_[A-Za-z0-9]{6}$/.test(teamId)) {
-    return res.status(400).json({ ok: false, error: "ID squadra non valido." });
+    return res.status(400).json({
+      ok: false,
+      error: "ID squadra non valido."
+    });
   }
 
   if (!/^l_[A-Za-z0-9]{6}$/.test(leagueId || "")) {
-    return res.status(400).json({ ok: false, error: "ID campionato non valido." });
+    return res.status(400).json({
+      ok: false,
+      error: "ID campionato non valido."
+    });
   }
 
   if (!season || !Number.isInteger(last) || last < 1 || last > 10) {
     return res.status(400).json({
       ok: false,
-      error: "Stagione o numero di partite non valido. Il massimo è 10."
+      error: "Stagione o numero di partite non valido."
     });
   }
 
@@ -303,137 +311,118 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, last);
 
-    if (matches.length === 0) {
-      return res.json({
-        ok: true,
-        team_id: teamId,
-        matches_analyzed: 0,
-        message: "Nessuna partita trovata per questa squadra."
-      });
-    }
+    const players = {};
 
-    const keys = {
-      goals_for: null,
-      goals_against: null,
-      corners: "corners",
-      total_shots: "total_shots",
-      shots_on_target: "ShotsOnTarget",
-      yellow_cards: "yellow_cards",
-      red_cards: "red_cards",
-      fouls: "fouls"
-    };
-
-    const sums = {};
-    const counts = {};
-
-    for (const key of Object.keys(keys)) {
-      sums[key] = 0;
-      counts[key] = 0;
-    }
-
-    let statsMatchesAnalyzed = 0;
-    let teamName = teamId;
-    const matchDetails = [];
+    let matchesWithPlayerData = 0;
 
     for (const match of matches) {
-      const isHome = match.home_team?.id === teamId;
-
-      teamName = isHome
-        ? match.home_team.name
-        : match.away_team.name;
-
-      const goalsFor = Number(isHome ? match.score_home : match.score_away);
-      const goalsAgainst = Number(isHome ? match.score_away : match.score_home);
-
-      if (Number.isFinite(goalsFor)) {
-        sums.goals_for += goalsFor;
-        counts.goals_for++;
-      }
-
-      if (Number.isFinite(goalsAgainst)) {
-        sums.goals_against += goalsAgainst;
-        counts.goals_against++;
-      }
-
-      matchDetails.push({
-        date: match.date,
-        opponent: isHome ? match.away_team?.name : match.home_team?.name,
-        venue: isHome ? "Casa" : "Trasferta",
-        score: `${match.score_home}-${match.score_away}`
-      });
-
       try {
-        const stats = await pitchGet(`/v1/matches/${match.id}/stats`);
-        const allPeriod = (stats.periods || []).find(p => p.period === "All");
+        const data = await pitchGet(
+          `/v1/matches/${match.id}/players`
+        );
 
-        if (!allPeriod) continue;
+        if (!Array.isArray(data)) continue;
 
-        const found = {};
+        let foundPlayers = false;
 
-        for (const group of allPeriod.groups || []) {
-          for (const item of group.items || []) {
-            if (
-              item.key &&
-              Object.values(keys).includes(item.key) &&
-              found[item.key] === undefined
-            ) {
-              found[item.key] = item;
+        for (const entry of data) {
+          if (entry.team_id !== teamId || !entry.player?.id) {
+            continue;
+          }
+
+          foundPlayers = true;
+
+          const id = entry.player.id;
+
+          if (!players[id]) {
+            players[id] = {
+              id,
+              name: entry.player.name,
+              appearances: 0,
+              stats: {}
+            };
+          }
+
+          const player = players[id];
+          player.appearances++;
+
+          for (const group of entry.stats || []) {
+            for (const [label, item] of Object.entries(group.stats || {})) {
+              const statKey = item.key;
+              const stat = item.stat || {};
+              const value = Number(stat.value);
+
+              if (!statKey || !Number.isFinite(value)) continue;
+
+              if (!player.stats[statKey]) {
+                player.stats[statKey] = {
+                  label,
+                  total: 0,
+                  samples: 0,
+                  attempts: 0
+                };
+              }
+
+              player.stats[statKey].total += value;
+              player.stats[statKey].samples++;
+
+              const attempts = Number(stat.total);
+
+              if (Number.isFinite(attempts)) {
+                player.stats[statKey].attempts += attempts;
+              }
             }
           }
         }
 
-        let hasStats = false;
-
-        for (const [name, statKey] of Object.entries(keys)) {
-          if (!statKey) continue;
-
-          const item = found[statKey];
-          if (!item) continue;
-
-          const rawValue = isHome ? item.home : item.away;
-          const value = parseInt(String(rawValue), 10);
-
-          if (Number.isFinite(value)) {
-            sums[name] += value;
-            counts[name]++;
-            hasStats = true;
-          }
-        }
-
-        if (hasStats) statsMatchesAnalyzed++;
-      } catch (statsError) {
-        // Se mancano le statistiche di una partita, continua con le altre.
+        if (foundPlayers) matchesWithPlayerData++;
+      } catch (error) {
+        // Continua anche se mancano i dati di una partita.
       }
     }
 
-    const averages = {};
+    const result = Object.values(players).map(player => {
+      const averages = {};
 
-    for (const key of Object.keys(sums)) {
-      averages[key] = counts[key]
-        ? Number((sums[key] / counts[key]).toFixed(2))
-        : null;
-    }
+      for (const [key, stat] of Object.entries(player.stats)) {
+        averages[key] = {
+          label: stat.label,
+          average: Number(
+            (stat.total / stat.samples).toFixed(2)
+          ),
+          total: stat.total,
+          samples: stat.samples,
+          attempts: stat.attempts
+        };
+      }
+
+      return {
+        id: player.id,
+        name: player.name,
+        appearances: player.appearances,
+        stats: averages
+      };
+    });
+
+    result.sort((a, b) => b.appearances - a.appearances);
 
     res.json({
       ok: true,
-      team: {
-        id: teamId,
-        name: teamName
-      },
+      team_id: teamId,
       league_id: leagueId,
       season,
       matches_requested: last,
       matches_analyzed: matches.length,
-      stats_matches_analyzed: statsMatchesAnalyzed,
-      averages,
-      sample_counts: counts,
-      matches: matchDetails
+      matches_with_player_data: matchesWithPlayerData,
+      players_found: result.length,
+      players: result
     });
 
   } catch (err) {
     handleError(res, err);
   }
 });
+
 
 // Gestione errori
 app.use((err, req, res, next) => {
