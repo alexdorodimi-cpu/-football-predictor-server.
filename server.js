@@ -125,15 +125,6 @@ async function saveMatchesToDatabase(matches) {
   return rows.length;
 }
 
-  if (error) {
-    console.error("Errore salvataggio partita:", error.message);
-    throw error;
-  }
-
-  return true;
-}
-
-
 async function pitchGet(path, params = {}) {
   const url = new URL(API_BASE + path);
 
