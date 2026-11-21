@@ -96,7 +96,7 @@ async function saveMatchToDatabase(match) {
       status: match.status || null
     });
 
-  // SALVATAGGIO PARTITE IN BLOCCO SU SUPABASE
+// SALVATAGGIO PARTITE IN BLOCCO SU SUPABASE
 async function saveMatchesToDatabase(matches) {
   if (!matches.length) return 0;
 
@@ -124,7 +124,6 @@ async function saveMatchesToDatabase(matches) {
 
   return rows.length;
 }
-
 async function pitchGet(path, params = {}) {
   const url = new URL(API_BASE + path);
 
