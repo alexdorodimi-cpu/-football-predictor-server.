@@ -12,7 +12,7 @@ const API_KEY = process.env.PITCHAPI_KEY;
 const ACCESS_TOKEN = process.env.PREDICTOR_ACCESS_TOKEN;
 const API_BASE = "https://api.pitchapi.dev";
 
-// TEST TEMPORANEO CONFIGURAZIONE
+// TEST CONFIGURAZIONE
 app.get("/debug-config", (req, res) => {
   res.json({
     pitchapi_key_present: Boolean(API_KEY),
@@ -90,16 +90,6 @@ function validMatchId(id) {
   return /^m_[A-Za-z0-9]{6}$/.test(id);
 }
 
-app.use(express.static("public"));
-
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "football-predictor-ai",
-    time: new Date().toISOString()
-  });
-});
-
 // Verifica collegamento PitchAPI
 app.get("/api/status", requireConfig, requireAccess, async (req, res) => {
   try {
@@ -137,6 +127,7 @@ app.get("/api/fixtures", requireConfig, requireAccess, async (req, res) => {
 
   try {
     const data = await pitchGet(`/v1/date/${date}`, { status });
+
     res.json({
       ok: true,
       date,
@@ -148,7 +139,7 @@ app.get("/api/fixtures", requireConfig, requireAccess, async (req, res) => {
   }
 });
 
-// Funzione per creare le rotte delle statistiche
+// Rotte statistiche delle partite
 function addMatchRoute(route, endpoint) {
   app.get(route, requireConfig, requireAccess, async (req, res) => {
     const id = req.params.id;
@@ -161,10 +152,7 @@ function addMatchRoute(route, endpoint) {
     }
 
     try {
-      const data = await pitchGet(
-        `/v1/matches/${id}${endpoint}`
-      );
-
+      const data = await pitchGet(`/v1/matches/${id}${endpoint}`);
       res.json({ ok: true, response: data });
     } catch (err) {
       handleError(res, err);
@@ -172,65 +160,56 @@ function addMatchRoute(route, endpoint) {
   });
 }
 
-// Dettagli della partita
+// Dettagli partita
 addMatchRoute("/api/fixture/:id", "");
 
-// Statistiche delle due squadre
+// Statistiche squadre
 addMatchRoute("/api/fixture/:id/statistics", "/stats");
 
-// Tiri e tiri in porta
+// Tiri
 addMatchRoute("/api/fixture/:id/shots", "/shots");
 
 // Gol, cartellini e sostituzioni
 addMatchRoute("/api/fixture/:id/events", "/events");
 
-// Statistiche dei giocatori
+// Statistiche giocatori
 addMatchRoute("/api/fixture/:id/players", "/players");
 
 // Formazioni
 addMatchRoute("/api/fixture/:id/lineups", "/lineups");
 
-// Andamento della partita
+// Andamento partita
 addMatchRoute("/api/fixture/:id/momentum", "/momentum");
 
 // Statistiche avanzate e xG
 addMatchRoute("/api/fixture/:id/advanced", "/advanced");
 
-// Precedenti tra le squadre
+// Precedenti
 addMatchRoute("/api/fixture/:id/h2h", "/h2h");
 
 // Statistiche in diretta
 addMatchRoute("/api/fixture/:id/live", "/live");
 
-// Mappa dei tiri e delle azioni
+// Mappa tiri e azioni
 addMatchRoute("/api/fixture/:id/heatmaps", "/heatmaps");
 
-// Pronostici e quote non sono forniti da PitchAPI
-app.get(
-  "/api/fixture/:id/predictions",
-  requireConfig,
-  requireAccess,
-  (req, res) => {
-    res.status(501).json({
-      ok: false,
-      error: "I pronostici saranno generati dal nostro modello di analisi."
-    });
-  }
-);
+// Pronostici
+app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, (req, res) => {
+  res.status(501).json({
+    ok: false,
+    error: "I pronostici saranno generati dal nostro modello di analisi."
+  });
+});
 
-app.get(
-  "/api/fixture/:id/odds",
-  requireConfig,
-  requireAccess,
-  (req, res) => {
-    res.status(501).json({
-      ok: false,
-      error: "Le quote richiedono una fonte dati separata."
-    });
-  }
-);
+// Quote
+app.get("/api/fixture/:id/odds", requireConfig, requireAccess, (req, res) => {
+  res.status(501).json({
+    ok: false,
+    error: "Le quote richiedono una fonte dati separata."
+  });
+});
 
-// Campionati e relative partite
+// Campionati e partite
 app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res) => {
   const id = req.params.id;
   const season = req.query.season;
@@ -267,7 +246,169 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
   }
 });
 
-// Medie statistiche delle squadre
+// MEDIE STATISTICHE DELLE SQUADRE
+app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
+  const teamId = req.params.id;
+  const leagueId = req.query.league;
+  const season = req.query.season;
+  const last = Number(req.query.last || 10);
+
+  if (!/^t_[A-Za-z0-9]{6}$/.test(teamId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID squadra non valido."
+    });
+  }
+
+  if (!/^l_[A-Za-z0-9]{6}$/.test(leagueId || "")) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID campionato non valido."
+    });
+  }
+
+  if (!season || !Number.isInteger(last) || last < 1 || last > 10) {
+    return res.status(400).json({
+      ok: false,
+      error: "Stagione o numero di partite non valido."
+    });
+  }
+
+  try {
+    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status: "played"
+    });
+
+    const matches = (leagueData.matches || [])
+      .filter(match =>
+        match.home_team?.id === teamId ||
+        match.away_team?.id === teamId
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, last);
+
+    const totals = {
+      goals_for: 0,
+      goals_against: 0,
+      corners: 0,
+      total_shots: 0,
+      shots_on_target: 0,
+      yellow_cards: 0,
+      red_cards: 0,
+      fouls: 0
+    };
+
+    const counts = {};
+    const analyzedMatches = [];
+
+    for (const key of Object.keys(totals)) {
+      counts[key] = 0;
+    }
+
+    for (const match of matches) {
+      const isHome = match.home_team?.id === teamId;
+
+      const matchInfo = {
+        id: match.id,
+        date: match.date,
+        opponent: isHome
+          ? match.away_team?.name
+          : match.home_team?.name
+      };
+
+      // Gol fatti e subiti
+      const homeScore = Number(
+        match.home_score ?? match.score?.home ?? match.home_team?.score
+      );
+
+      const awayScore = Number(
+        match.away_score ?? match.score?.away ?? match.away_team?.score
+      );
+
+      const scored = isHome ? homeScore : awayScore;
+      const conceded = isHome ? awayScore : homeScore;
+
+      if (Number.isFinite(scored)) {
+        totals.goals_for += scored;
+        counts.goals_for++;
+      }
+
+      if (Number.isFinite(conceded)) {
+        totals.goals_against += conceded;
+        counts.goals_against++;
+      }
+
+      // Statistiche della partita
+      try {
+        const data = await pitchGet(`/v1/matches/${match.id}/stats`);
+
+        const periods = data?.periods || [];
+        const period = periods.find(p =>
+          String(p.key || p.name || "").toLowerCase() === "all"
+        ) || periods[0];
+
+        const groups = period?.groups || [];
+
+        for (const group of groups) {
+          for (const item of group.items || []) {
+            const key = item.key;
+
+            const statMap = {
+              corners: "corners",
+              total_shots: "total_shots",
+              shots_on_target: "shots_on_target",
+              yellow_cards: "yellow_cards",
+              red_cards: "red_cards",
+              fouls: "fouls"
+            };
+
+            const target = statMap[key];
+            if (!target) continue;
+
+            const side = isHome ? item.home : item.away;
+
+            let value = Number(
+              side?.value ?? side?.total ?? side
+            );
+
+            if (!Number.isFinite(value)) continue;
+
+            totals[target] += value;
+            counts[target]++;
+          }
+        }
+      } catch (error) {
+        // Se mancano le statistiche di una partita, continua.
+      }
+
+      analyzedMatches.push(matchInfo);
+    }
+
+    const averages = {};
+
+    for (const key of Object.keys(totals)) {
+      averages[key] = counts[key]
+        ? Number((totals[key] / counts[key]).toFixed(2))
+        : null;
+    }
+
+    res.json({
+      ok: true,
+      team_id: teamId,
+      league_id: leagueId,
+      season,
+      matches_requested: last,
+      matches_analyzed: matches.length,
+      averages,
+      sample_counts: counts,
+      matches: analyzedMatches
+    });
+
+  } catch (err) {
+    handleError(res, err);
+  }
+});
 
 // STATISTICHE INDIVIDUALI DEI GIOCATORI
 app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (req, res) => {
@@ -312,14 +453,11 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
       .slice(0, last);
 
     const players = {};
-
     let matchesWithPlayerData = 0;
 
     for (const match of matches) {
       try {
-        const data = await pitchGet(
-          `/v1/matches/${match.id}/players`
-        );
+        const data = await pitchGet(`/v1/matches/${match.id}/players`);
 
         if (!Array.isArray(data)) continue;
 
@@ -387,9 +525,7 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
       for (const [key, stat] of Object.entries(player.stats)) {
         averages[key] = {
           label: stat.label,
-          average: Number(
-            (stat.total / stat.samples).toFixed(2)
-          ),
+          average: Number((stat.total / stat.samples).toFixed(2)),
           total: stat.total,
           samples: stat.samples,
           attempts: stat.attempts
@@ -422,7 +558,6 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
     handleError(res, err);
   }
 });
-
 
 // Gestione errori
 app.use((err, req, res, next) => {
