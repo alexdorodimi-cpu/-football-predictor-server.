@@ -448,10 +448,11 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
 });
 
 // BACKTEST STORICO - verifica i pronostici
+
 app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res) => {
   const leagueId = req.params.leagueId;
   const season = req.query.season || "2026/2027";
-  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
 
   if (!validLeagueId(leagueId)) {
     return res.status(400).json({
@@ -466,31 +467,203 @@ app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res
       status: "played"
     });
 
-    const matches = (data.matches || [])
+    const allMatches = (data.matches || [])
       .filter(match =>
-        match.status === "finished" ||
-        match.status === "completed" ||
-        (getMatchScore(match, true) !== null &&
-         getMatchScore(match, false) !== null)
+        (match.status === "finished" ||
+         match.status === "completed" ||
+         (getMatchScore(match, true) !== null &&
+          getMatchScore(match, false) !== null)) &&
+        match.date
       )
-      .sort((a, b) => new Date(a.date) - new Date(b.date))
-      .slice(-limit);
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    const testMatches = allMatches.slice(-limit);
+
+    const markets = {
+      "1X2": { total: 0, correct: 0 },
+      "Over 1.5": { total: 0, correct: 0 },
+      "Over 2.5": { total: 0, correct: 0 },
+      "Over 3.5": { total: 0, correct: 0 },
+      "Goal": { total: 0, correct: 0 },
+      "Risultato esatto": { total: 0, correct: 0 }
+    };
+
+    const confidence95 = {
+      total: 0,
+      correct: 0
+    };
+
+    const results = [];
+    let skipped = 0;
+
+    function average(sample, key) {
+      return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
+    }
+
+    function recordMarket(name, probability, success) {
+      markets[name].total++;
+      if (success) markets[name].correct++;
+
+      if (probability >= 0.95) {
+        confidence95.total++;
+        if (success) confidence95.correct++;
+      }
+    }
+
+    for (const fixture of testMatches) {
+      const previousMatches = allMatches.filter(match =>
+        match.date < fixture.date &&
+        (
+          match.home_team?.id === fixture.home_team?.id ||
+          match.away_team?.id === fixture.home_team?.id ||
+          match.home_team?.id === fixture.away_team?.id ||
+          match.away_team?.id === fixture.away_team?.id
+        )
+      );
+
+      function getTeamSample(teamId) {
+        return previousMatches
+          .filter(match =>
+            match.home_team?.id === teamId ||
+            match.away_team?.id === teamId
+          )
+          .sort((a, b) => new Date(b.date) - new Date(a.date))
+          .slice(0, 10)
+          .map(match => {
+            const isHome = match.home_team?.id === teamId;
+            return {
+              scored: getMatchScore(match, isHome),
+              conceded: getMatchScore(match, !isHome)
+            };
+          })
+          .filter(item =>
+            item.scored !== null && item.conceded !== null
+          );
+      }
+
+      const homeSample = getTeamSample(fixture.home_team.id);
+      const awaySample = getTeamSample(fixture.away_team.id);
+
+      if (homeSample.length < 5 || awaySample.length < 5) {
+        skipped++;
+        continue;
+      }
+
+      const homeFor = average(homeSample, "scored");
+      const homeAgainst = average(homeSample, "conceded");
+      const awayFor = average(awaySample, "scored");
+      const awayAgainst = average(awaySample, "conceded");
+
+      const homeLambda = Math.max(0.10, Math.min(5, (homeFor + awayAgainst) / 2));
+      const awayLambda = Math.max(0.10, Math.min(5, (awayFor + homeAgainst) / 2));
+
+      const matrix = buildGoalModel(homeLambda, awayLambda);
+
+      const probability = condition =>
+        matrix
+          .filter(condition)
+          .reduce((sum, item) => sum + item.probability, 0);
+
+      const pHome = probability(item => item.home > item.away);
+      const pDraw = probability(item => item.home === item.away);
+      const pAway = probability(item => item.home < item.away);
+
+      const pOver15 = probability(item => item.home + item.away > 1);
+      const pOver25 = probability(item => item.home + item.away > 2);
+      const pOver35 = probability(item => item.home + item.away > 3);
+      const pGoal = probability(item => item.home > 0 && item.away > 0);
+
+      const predictions = [
+        { name: "1", probability: pHome, success: getMatchScore(fixture, true) > getMatchScore(fixture, false) },
+        { name: "X", probability: pDraw, success: getMatchScore(fixture, true) === getMatchScore(fixture, false) },
+        { name: "2", probability: pAway, success: getMatchScore(fixture, true) < getMatchScore(fixture, false) }
+      ];
+
+      predictions.sort((a, b) => b.probability - a.probability);
+      const best1X2 = predictions[0];
+
+      recordMarket("1X2", best1X2.probability, best1X2.success);
+
+      const actualHome = getMatchScore(fixture, true);
+      const actualAway = getMatchScore(fixture, false);
+      const actualTotal = actualHome + actualAway;
+      const actualGoal = actualHome > 0 && actualAway > 0;
+
+      recordMarket("Over 1.5",
+        Math.max(pOver15, 1 - pOver15),
+        pOver15 >= 0.5 ? actualTotal > 1 : actualTotal <= 1
+      );
+
+      recordMarket("Over 2.5",
+        Math.max(pOver25, 1 - pOver25),
+        pOver25 >= 0.5 ? actualTotal > 2 : actualTotal <= 2
+      );
+
+      recordMarket("Over 3.5",
+        Math.max(pOver35, 1 - pOver35),
+        pOver35 >= 0.5 ? actualTotal > 3 : actualTotal <= 3
+      );
+
+      recordMarket("Goal",
+        Math.max(pGoal, 1 - pGoal),
+        pGoal >= 0.5 ? actualGoal : !actualGoal
+      );
+
+      const bestScore = [...matrix]
+        .sort((a, b) => b.probability - a.probability)[0];
+
+      recordMarket(
+        "Risultato esatto",
+        bestScore.probability,
+        bestScore.home === actualHome && bestScore.away === actualAway
+      );
+
+      results.push({
+        date: fixture.date,
+        match: `${fixture.home_team.name} - ${fixture.away_team.name}`,
+        actual: `${actualHome}-${actualAway}`,
+        predicted_1x2: best1X2.name,
+        predicted_1x2_probability: percent(best1X2.probability),
+        predicted_score: `${bestScore.home}-${bestScore.away}`,
+        predicted_score_probability: percent(bestScore.probability),
+        samples: {
+          home: homeSample.length,
+          away: awaySample.length
+        }
+      });
+    }
+
+    const summary = {};
+
+    for (const [name, stats] of Object.entries(markets)) {
+      summary[name] = {
+        evaluated: stats.total,
+        correct: stats.correct,
+        accuracy: stats.total
+          ? percent(stats.correct / stats.total)
+          : null
+      };
+    }
 
     res.json({
       ok: true,
-      message: "Partite storiche recuperate. Prossimo passaggio: simulazione senza dati futuri.",
+      model: "Poisson storico senza utilizzo di risultati futuri",
       league_id: leagueId,
       season,
-      matches_found: matches.length,
-      matches: matches.map(match => ({
-        id: match.id,
-        date: match.date,
-        home_team: match.home_team?.name,
-        away_team: match.away_team?.name,
-        score_home: getMatchScore(match, true),
-        score_away: getMatchScore(match, false)
-      }))
+      requested_matches: testMatches.length,
+      evaluated_matches: results.length,
+      skipped_matches: skipped,
+      accuracy_by_market: summary,
+      high_confidence_95: {
+        evaluated: confidence95.total,
+        correct: confidence95.correct,
+        accuracy: confidence95.total
+          ? percent(confidence95.correct / confidence95.total)
+          : null
+      },
+      results
     });
+
   } catch (err) {
     handleError(res, err);
   }
