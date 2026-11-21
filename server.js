@@ -307,10 +307,10 @@ app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req
       return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
     }
 
-    const homeGoalsFor = average(homeSample, "scored");
-    const homeGoalsAgainst = average(homeSample, "conceded");
-    const awayGoalsFor = average(awaySample, "scored");
-    const awayGoalsAgainst = average(awaySample, "conceded");
+    const homeGoalsFor = weightedAverage(homeSample, "scored");
+const homeGoalsAgainst = weightedAverage(homeSample, "conceded");
+const awayGoalsFor = weightedAverage(awaySample, "scored");
+const awayGoalsAgainst = weightedAverage(awaySample, "conceded");
 
     // Stima semplice: media tra produzione offensiva e gol concessi dall'avversaria.
     const expectedHomeGoals = Math.max(
@@ -501,6 +501,22 @@ const markets = {
     function average(sample, key) {
       return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
     }
+    
+function weightedAverage(sample, key) {
+  if (!sample.length) return 0;
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+
+  sample.forEach((item, index) => {
+    const weight = Math.pow(0.85, index);
+
+    weightedSum += item[key] * weight;
+    totalWeight += weight;
+  });
+
+  return weightedSum / totalWeight;
+}
 
     function recordMarket(name, probability, success) {
       markets[name].total++;
@@ -551,11 +567,10 @@ const markets = {
         continue;
       }
 
-      const homeFor = average(homeSample, "scored");
-      const homeAgainst = average(homeSample, "conceded");
-      const awayFor = average(awaySample, "scored");
-      const awayAgainst = average(awaySample, "conceded");
-
+      const homeFor = weightedAverage(homeSample, "scored");
+const homeAgainst = weightedAverage(homeSample, "conceded");
+const awayFor = weightedAverage(awaySample, "scored");
+const awayAgainst = weightedAverage(awaySample, "conceded");
       const homeLambda = Math.max(0.10, Math.min(5, (homeFor + awayAgainst) / 2));
       const awayLambda = Math.max(0.10, Math.min(5, (awayFor + homeAgainst) / 2));
 
