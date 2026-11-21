@@ -410,6 +410,170 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
   }
 });
 
+app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
+  const teamId = req.params.id;
+  const leagueId = req.query.league;
+  const season = req.query.season;
+  const last = Number(req.query.last || 10);
+
+  if (!/^t_[A-Za-z0-9]{6}$/.test(teamId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID squadra non valido."
+    });
+  }
+
+  if (!/^l_[A-Za-z0-9]{6}$/.test(leagueId || "")) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID campionato non valido."
+    });
+  }
+
+  if (!season || !Number.isInteger(last) || last < 1 || last > 10) {
+    return res.status(400).json({
+      ok: false,
+      error: "Stagione o numero di partite non valido."
+    });
+  }
+
+  try {
+    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status: "played"
+    });
+
+    const matches = (leagueData.matches || [])
+      .filter(match =>
+        match.home_team?.id === teamId ||
+        match.away_team?.id === teamId
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, last);
+
+    const stats = {
+      goals_for: 0,
+      goals_against: 0,
+      corners: 0,
+      total_shots: 0,
+      shots_on_target: 0,
+      yellow_cards: 0,
+      red_cards: 0,
+      fouls: 0,
+      expected_goals: 0,
+      possession: 0
+    };
+
+    const counts = {};
+    const keys = {
+      corners: ["corners"],
+      total_shots: ["total_shots"],
+      shots_on_target: ["ShotsOnTarget", "shots_on_target"],
+      yellow_cards: ["yellow_cards"],
+      red_cards: ["red_cards"],
+      fouls: ["fouls"],
+      expected_goals: ["expected_goals"],
+      possession: ["BallPossesion", "ball_possession"]
+    };
+
+    let statsMatches = 0;
+
+    for (const match of matches) {
+      const isHome = match.home_team?.id === teamId;
+      const team = isHome ? match.home_team : match.away_team;
+      const opponent = isHome ? match.away_team : match.home_team;
+
+      const goalsFor = Number(
+        isHome ? match.home_score : match.away_score
+      );
+      const goalsAgainst = Number(
+        isHome ? match.away_score : match.home_score
+      );
+
+      if (Number.isFinite(goalsFor)) {
+        stats.goals_for += goalsFor;
+        counts.goals_for = (counts.goals_for || 0) + 1;
+      }
+
+      if (Number.isFinite(goalsAgainst)) {
+        stats.goals_against += goalsAgainst;
+        counts.goals_against = (counts.goals_against || 0) + 1;
+      }
+
+      try {
+        const data = await pitchGet(`/v1/matches/${match.id}/stats`);
+        const period = (data.periods || []).find(p => p.period === "All");
+
+        if (!period) continue;
+
+        const values = {};
+
+        for (const group of period.groups || []) {
+          for (const item of group.items || []) {
+            values[item.key] = isHome ? item.home : item.away;
+          }
+        }
+
+        let found = false;
+
+        for (const [name, possibleKeys] of Object.entries(keys)) {
+          const key = possibleKeys.find(k => values[k] !== undefined);
+          if (!key) continue;
+
+          const value = parseFloat(String(values[key]).replace(",", "."));
+          if (!Number.isFinite(value)) continue;
+
+          stats[name] += value;
+          counts[name] = (counts[name] || 0) + 1;
+          found = true;
+        }
+
+        if (found) statsMatches++;
+      } catch (error) {
+        // Continua con le altre partite se mancano statistiche.
+      }
+    }
+
+    const averages = {};
+
+    for (const [key, total] of Object.entries(stats)) {
+      averages[key] = counts[key]
+        ? Number((total / counts[key]).toFixed(2))
+        : null;
+    }
+
+    res.json({
+      ok: true,
+      team: {
+        id: teamId,
+        name: matches[0]
+          ? (matches[0].home_team?.id === teamId
+              ? matches[0].home_team.name
+              : matches[0].away_team.name)
+          : teamId
+      },
+      league_id: leagueId,
+      season,
+      matches_requested: last,
+      matches_analyzed: matches.length,
+      stats_matches_analyzed: statsMatches,
+      averages,
+      sample_counts: counts,
+      matches: matches.map(match => ({
+        id: match.id,
+        date: match.date,
+        home_team: match.home_team?.name,
+        away_team: match.away_team?.name,
+        home_score: match.home_score,
+        away_score: match.away_score
+      }))
+    });
+
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
 // STATISTICHE INDIVIDUALI DEI GIOCATORI
 app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (req, res) => {
   const teamId = req.params.id;
