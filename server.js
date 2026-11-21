@@ -443,6 +443,56 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
   }
 });
 
+// BACKTEST STORICO - verifica i pronostici
+app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res) => {
+  const leagueId = req.params.leagueId;
+  const season = req.query.season || "2026/2027";
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+  if (!validLeagueId(leagueId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID campionato non valido."
+    });
+  }
+
+  try {
+    const data = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status: "played"
+    });
+
+    const matches = (data.matches || [])
+      .filter(match =>
+        match.status === "finished" ||
+        match.status === "completed" ||
+        (getMatchScore(match, true) !== null &&
+         getMatchScore(match, false) !== null)
+      )
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .slice(-limit);
+
+    res.json({
+      ok: true,
+      message: "Partite storiche recuperate. Prossimo passaggio: simulazione senza dati futuri.",
+      league_id: leagueId,
+      season,
+      matches_found: matches.length,
+      matches: matches.map(match => ({
+        id: match.id,
+        date: match.date,
+        home_team: match.home_team?.name,
+        away_team: match.away_team?.name,
+        score_home: getMatchScore(match, true),
+        score_away: getMatchScore(match, false)
+      }))
+    });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+
 // MEDIE STATISTICHE DELLE SQUADRE
 app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
   const teamId = req.params.id;
