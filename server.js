@@ -317,14 +317,14 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
           : match.home_team?.name
       };
 
-      // Gol fatti e subiti
-      const homeScore = Number(
-        match.home_score ?? match.score?.home ?? match.home_team?.score
-      );
+     // Gol fatti e subiti
+const homeScore = Number(
+  match.score_home ?? match.home_score ?? match.score?.home ?? match.home_team?.score
+);
 
-      const awayScore = Number(
-        match.away_score ?? match.score?.away ?? match.away_team?.score
-      );
+const awayScore = Number(
+  match.score_away ?? match.away_score ?? match.score?.away ?? match.away_team?.score
+);
 
       const scored = isHome ? homeScore : awayScore;
       const conceded = isHome ? awayScore : homeScore;
