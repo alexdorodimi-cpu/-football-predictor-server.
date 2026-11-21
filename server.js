@@ -1,4 +1,3 @@
-
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 
@@ -115,6 +114,42 @@ function getMatchScore(match, isHome) {
   return getNumber(value);
 }
 
+// DISTRIBUZIONE DI POISSON
+function poissonProbability(lambda, goals) {
+  if (lambda <= 0) return goals === 0 ? 1 : 0;
+
+  let factorial = 1;
+  for (let i = 2; i <= goals; i++) factorial *= i;
+
+  return Math.exp(-lambda) * Math.pow(lambda, goals) / factorial;
+}
+
+function buildGoalModel(homeLambda, awayLambda) {
+  const maxGoals = 8;
+  const matrix = [];
+  let total = 0;
+
+  for (let home = 0; home <= maxGoals; home++) {
+    for (let away = 0; away <= maxGoals; away++) {
+      const probability =
+        poissonProbability(homeLambda, home) *
+        poissonProbability(awayLambda, away);
+
+      matrix.push({ home, away, probability });
+      total += probability;
+    }
+  }
+
+  // Normalizza la matrice per compensare la piccola coda oltre 8 gol.
+  for (const item of matrix) item.probability /= total;
+
+  return matrix;
+}
+
+function percent(value) {
+  return Number((value * 100).toFixed(1));
+}
+
 // STATO COLLEGAMENTO
 app.get("/api/status", requireConfig, requireAccess, async (req, res) => {
   try {
@@ -163,7 +198,6 @@ app.get("/api/fixtures", requireConfig, requireAccess, async (req, res) => {
     handleError(res, err);
   }
 });
-
 // ROTTE DELLE PARTITE
 function addMatchRoute(route, endpoint) {
   app.get(route, requireConfig, requireAccess, async (req, res) => {
@@ -197,14 +231,173 @@ addMatchRoute("/api/fixture/:id/h2h", "/h2h");
 addMatchRoute("/api/fixture/:id/live", "/live");
 addMatchRoute("/api/fixture/:id/heatmaps", "/heatmaps");
 
-// PRONOSTICI - DA IMPLEMENTARE
-app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, (req, res) => {
-  res.status(501).json({
-    ok: false,
-    error: "I pronostici saranno generati dal nostro modello di analisi."
-  });
-});
+// PRONOSTICI BASATI SULLE ULTIME 10 PARTITE E SULLA DISTRIBUZIONE DI POISSON
+app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req, res) => {
+  const matchId = req.params.id;
 
+  if (!validMatchId(matchId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID partita non valido."
+    });
+  }
+
+  try {
+    const fixture = await pitchGet(`/v1/matches/${matchId}`);
+
+    if (!fixture?.league?.id || !fixture?.season ||
+        !fixture?.home_team?.id || !fixture?.away_team?.id) {
+      return res.status(422).json({
+        ok: false,
+        error: "La partita non contiene campionato, stagione o squadre sufficienti per il pronostico."
+      });
+    }
+
+    const leagueId = fixture.league.id;
+    const season = fixture.season;
+    const homeId = fixture.home_team.id;
+    const awayId = fixture.away_team.id;
+
+    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status: "played"
+    });
+
+    const playedMatches = (leagueData.matches || [])
+      .filter(match => match.status === "finished" || match.status === "completed" ||
+        (getMatchScore(match, true) !== null && getMatchScore(match, false) !== null))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    function getTeamSample(teamId) {
+      return playedMatches
+        .filter(match =>
+          match.home_team?.id === teamId || match.away_team?.id === teamId
+        )
+        .slice(0, 10)
+        .map(match => {
+          const isHome = match.home_team?.id === teamId;
+          return {
+            scored: getMatchScore(match, isHome),
+            conceded: getMatchScore(match, !isHome),
+            date: match.date
+          };
+        })
+        .filter(item => item.scored !== null && item.conceded !== null);
+    }
+
+    const homeSample = getTeamSample(homeId);
+    const awaySample = getTeamSample(awayId);
+
+    if (homeSample.length < 5 || awaySample.length < 5) {
+      return res.status(422).json({
+        ok: false,
+        error: "Dati insufficienti: servono almeno 5 partite con risultato valido per ciascuna squadra.",
+        samples: {
+          home: homeSample.length,
+          away: awaySample.length
+        }
+      });
+    }
+
+    function average(sample, key) {
+      return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
+    }
+
+    const homeGoalsFor = average(homeSample, "scored");
+    const homeGoalsAgainst = average(homeSample, "conceded");
+    const awayGoalsFor = average(awaySample, "scored");
+    const awayGoalsAgainst = average(awaySample, "conceded");
+
+    // Stima semplice: media tra produzione offensiva e gol concessi dall'avversaria.
+    const expectedHomeGoals = Math.max(
+      0.10,
+      Math.min(5, (homeGoalsFor + awayGoalsAgainst) / 2)
+    );
+    const expectedAwayGoals = Math.max(
+      0.10,
+      Math.min(5, (awayGoalsFor + homeGoalsAgainst) / 2)
+    );
+
+    const matrix = buildGoalModel(expectedHomeGoals, expectedAwayGoals);
+
+    const homeWin = matrix
+      .filter(item => item.home > item.away)
+      .reduce((sum, item) => sum + item.probability, 0);
+
+    const draw = matrix
+      .filter(item => item.home === item.away)
+      .reduce((sum, item) => sum + item.probability, 0);
+
+    const awayWin = matrix
+      .filter(item => item.home < item.away)
+      .reduce((sum, item) => sum + item.probability, 0);
+
+    const over = line => matrix
+      .filter(item => item.home + item.away > line)
+      .reduce((sum, item) => sum + item.probability, 0);
+
+    const under = line => 1 - over(line);
+
+    const bttsYes = matrix
+      .filter(item => item.home > 0 && item.away > 0)
+      .reduce((sum, item) => sum + item.probability, 0);
+
+    const exactScores = [...matrix]
+      .sort((a, b) => b.probability - a.probability)
+      .slice(0, 5)
+      .map(item => ({
+        score: `${item.home}-${item.away}`,
+        probability: percent(item.probability)
+      }));
+
+    res.json({
+      ok: true,
+      model: "Poisson basato sulle medie gol delle ultime 10 partite",
+      match: {
+        id: matchId,
+        league: fixture.league.name,
+        season,
+        home_team: fixture.home_team.name,
+        away_team: fixture.away_team.name,
+        date: fixture.date,
+        status: fixture.status
+      },
+      samples: {
+        home: homeSample.length,
+        away: awaySample.length
+      },
+      averages: {
+        home_goals_for: Number(homeGoalsFor.toFixed(2)),
+        home_goals_against: Number(homeGoalsAgainst.toFixed(2)),
+        away_goals_for: Number(awayGoalsFor.toFixed(2)),
+        away_goals_against: Number(awayGoalsAgainst.toFixed(2))
+      },
+      expected_goals: {
+        home: Number(expectedHomeGoals.toFixed(2)),
+        away: Number(expectedAwayGoals.toFixed(2)),
+        total: Number((expectedHomeGoals + expectedAwayGoals).toFixed(2))
+      },
+      probabilities: {
+        "1": percent(homeWin),
+        "X": percent(draw),
+        "2": percent(awayWin),
+        "over_1_5": percent(over(1)),
+        "under_1_5": percent(under(1)),
+        "over_2_5": percent(over(2)),
+        "under_2_5": percent(under(2)),
+        "over_3_5": percent(over(3)),
+        "under_3_5": percent(under(3)),
+        "btts_yes": percent(bttsYes),
+        "btts_no": percent(1 - bttsYes)
+      },
+      most_likely_scores: exactScores,
+      disclaimer: "Sono stime statistiche basate sui risultati storici disponibili, non garanzie. Non sono incluse quote bookmaker."
+    });
+
+  } catch (err) {
+    handleError(res, err);
+  }
+});
 // QUOTE - FONTE SEPARATA NON ANCORA COLLEGATA
 app.get("/api/fixture/:id/odds", requireConfig, requireAccess, (req, res) => {
   res.status(501).json({
@@ -251,7 +444,6 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
 });
 
 // MEDIE STATISTICHE DELLE SQUADRE
-// Questa route è presente una sola volta.
 app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
   const teamId = req.params.id;
   const leagueId = req.query.league;
@@ -307,12 +499,8 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
     };
 
     const counts = {};
+    for (const key of Object.keys(stats)) counts[key] = 0;
 
-    for (const key of Object.keys(stats)) {
-      counts[key] = 0;
-    }
-
-    // Chiavi esatte restituite da PitchAPI
     const keys = {
       corners: ["corners"],
       total_shots: ["total_shots"],
@@ -328,8 +516,6 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
 
     for (const match of matches) {
       const isHome = match.home_team?.id === teamId;
-
-      // GOL FATTI E SUBITI
       const goalsFor = getMatchScore(match, isHome);
       const goalsAgainst = getMatchScore(match, !isHome);
 
@@ -343,12 +529,9 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
         counts.goals_against++;
       }
 
-      // STATISTICHE DELLA PARTITA
       try {
         const data = await pitchGet(`/v1/matches/${match.id}/stats`);
-
         const periods = data?.periods || [];
-
         const period = periods.find(p =>
           String(p.period || p.key || p.name || "").toLowerCase() === "all"
         );
@@ -366,13 +549,6 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
           }
         }
 
-        console.log(
-          "STATISTICHE",
-          match.id,
-          "Tiri in porta:",
-          values.ShotsOnTarget
-        );
-
         let found = false;
 
         for (const [name, possibleKeys] of Object.entries(keys)) {
@@ -383,7 +559,6 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
           if (!foundKey) continue;
 
           const value = getNumber(values[foundKey]);
-
           if (value === null) continue;
 
           stats[name] += value;
@@ -394,16 +569,11 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
         if (found) statsMatches++;
 
       } catch (error) {
-        console.error(
-          "Errore statistiche partita",
-          match.id,
-          error.message
-        );
+        console.error("Errore statistiche partita", match.id, error.message);
       }
     }
 
     const averages = {};
-
     for (const [key, total] of Object.entries(stats)) {
       averages[key] = counts[key]
         ? Number((total / counts[key]).toFixed(2))
@@ -415,11 +585,9 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
       team: {
         id: teamId,
         name: matches[0]
-          ? (
-              matches[0].home_team?.id === teamId
-                ? matches[0].home_team.name
-                : matches[0].away_team.name
-            )
+          ? (matches[0].home_team?.id === teamId
+              ? matches[0].home_team.name
+              : matches[0].away_team.name)
           : teamId
       },
       league_id: leagueId,
@@ -428,7 +596,7 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
       matches_analyzed: matches.length,
       stats_matches_analyzed: statsMatches,
       averages,
-      sample_counts: counts,
+            sample_counts: counts,
       matches: matches.map(match => ({
         id: match.id,
         date: match.date,
@@ -492,18 +660,14 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
     for (const match of matches) {
       try {
         const data = await pitchGet(`/v1/matches/${match.id}/players`);
-
         if (!Array.isArray(data)) continue;
 
         let foundPlayers = false;
 
         for (const entry of data) {
-          if (entry.team_id !== teamId || !entry.player?.id) {
-            continue;
-          }
+          if (entry.team_id !== teamId || !entry.player?.id) continue;
 
           foundPlayers = true;
-
           const id = entry.player.id;
 
           if (!players[id]) {
@@ -539,7 +703,6 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
               player.stats[statKey].samples++;
 
               const attempts = Number(stat.total);
-
               if (Number.isFinite(attempts)) {
                 player.stats[statKey].attempts += attempts;
               }
@@ -550,11 +713,7 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
         if (foundPlayers) matchesWithPlayerData++;
 
       } catch (error) {
-        console.error(
-          "Errore statistiche giocatori",
-          match.id,
-          error.message
-        );
+        console.error("Errore statistiche giocatori", match.id, error.message);
       }
     }
 
@@ -615,3 +774,4 @@ app.use(express.static("public"));
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
 });
+      
