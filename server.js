@@ -1,7 +1,7 @@
 
 const express = require("express");
 const rateLimit = require("express-rate-limit");
-
+const { createClient } = require("@supabase/supabase-js");
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -11,7 +11,11 @@ const PORT = process.env.PORT || 10000;
 const API_KEY = process.env.PITCHAPI_KEY;
 const ACCESS_TOKEN = process.env.PREDICTOR_ACCESS_TOKEN;
 const API_BASE = "https://api.pitchapi.dev";
-
+// COLLEGAMENTO SUPABASE
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 // CONFIGURAZIONE
 app.get("/debug-config", (req, res) => {
   res.json({
