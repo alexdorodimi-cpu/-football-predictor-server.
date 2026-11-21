@@ -130,7 +130,10 @@ function weightedAverage(sample, key) {
 
   return weightedSum / totalWeight;
 }
-// Penalizza i campioni con pochi dati
+function getReliability(probability, sampleSize) {
+  let score = probability;
+
+  // Penalizza i campioni con pochi dati
   if (sampleSize < 10) {
     score -= (10 - sampleSize) * 2;
   }
