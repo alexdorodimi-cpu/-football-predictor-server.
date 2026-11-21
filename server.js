@@ -95,7 +95,7 @@ async function saveMatchToDatabase(match) {
       away_goals: match.away_goals ?? null,
       status: match.status || null
     });
-
+}
 // SALVATAGGIO PARTITE IN BLOCCO SU SUPABASE
 async function saveMatchesToDatabase(matches) {
   if (!matches.length) return 0;
