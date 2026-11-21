@@ -482,14 +482,10 @@ app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res
     
 const markets = {
   "1X2": { total: 0, correct: 0 },
-  "Over 1.5": { total: 0, correct: 0 },
-  "Under 1.5": { total: 0, correct: 0 },
-  "Over 2.5": { total: 0, correct: 0 },
-  "Under 2.5": { total: 0, correct: 0 },
-  "Over 3.5": { total: 0, correct: 0 },
-  "Under 3.5": { total: 0, correct: 0 },
-  "Goal": { total: 0, correct: 0 },
-  "No Goal": { total: 0, correct: 0 },
+  "Over/Under 1.5": { total: 0, correct: 0 },
+  "Over/Under 2.5": { total: 0, correct: 0 },
+  "Over/Under 3.5": { total: 0, correct: 0 },
+  "Goal/No Goal": { total: 0, correct: 0 },
   "Risultato esatto": { total: 0, correct: 0 }
 };
 
@@ -595,17 +591,36 @@ const markets = {
       const actualTotal = actualHome + actualAway;
       const actualGoal = actualHome > 0 && actualAway > 0;
 
-    recordMarket("Over 1.5", pOver15, actualTotal > 1);
-recordMarket("Under 1.5", 1 - pOver15, actualTotal <= 1);
+ const predictedOver15 = pOver15 >= 0.5;
 
-recordMarket("Over 2.5", pOver25, actualTotal > 2);
-recordMarket("Under 2.5", 1 - pOver25, actualTotal <= 2);
+recordMarket(
+  "Over/Under 1.5",
+  Math.max(pOver15, 1 - pOver15),
+  predictedOver15 ? actualTotal > 1 : actualTotal <= 1
+);
+const predictedOver25 = pOver25 >= 0.5;
 
-recordMarket("Over 3.5", pOver35, actualTotal > 3);
-recordMarket("Under 3.5", 1 - pOver35, actualTotal <= 3);
+recordMarket(
+  "Over/Under 2.5",
+  Math.max(pOver25, 1 - pOver25),
+  predictedOver25 ? actualTotal > 2 : actualTotal <= 2
+);
 
-recordMarket("Goal", pGoal, actualGoal);
-recordMarket("No Goal", 1 - pGoal, !actualGoal);
+const predictedOver35 = pOver35 >= 0.5;
+
+recordMarket(
+  "Over/Under 3.5",
+  Math.max(pOver35, 1 - pOver35),
+  predictedOver35 ? actualTotal > 3 : actualTotal <= 3
+);
+
+const predictedGoal = pGoal >= 0.5;
+
+recordMarket(
+  "Goal/No Goal",
+  Math.max(pGoal, 1 - pGoal),
+  predictedGoal ? actualGoal : !actualGoal
+);
       const bestScore = [...matrix]
         .sort((a, b) => b.probability - a.probability)[0];
 
