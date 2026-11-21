@@ -442,6 +442,7 @@ const reliability = {
         "btts_yes": percent(bttsYes),
         "btts_no": percent(1 - bttsYes)
       },
+      reliability,
       most_likely_scores: exactScores,
       disclaimer: "Sono stime statistiche basate sui risultati storici disponibili, non garanzie. Non sono incluse quote bookmaker."
     });
