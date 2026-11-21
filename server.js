@@ -352,17 +352,6 @@ const expectedAwayGoals = Math.max(
   Math.min(5, (awayAttack + homeDefense) / 2)
 );
 
-
-    // Stima semplice: media tra produzione offensiva e gol concessi dall'avversaria.
-    const expectedHomeGoals = Math.max(
-      0.10,
-      Math.min(5, (homeGoalsFor + awayGoalsAgainst) / 2)
-    );
-    const expectedAwayGoals = Math.max(
-      0.10,
-      Math.min(5, (awayGoalsFor + homeGoalsAgainst) / 2)
-    );
-
     const matrix = buildGoalModel(expectedHomeGoals, expectedAwayGoals);
 
     const homeWin = matrix
