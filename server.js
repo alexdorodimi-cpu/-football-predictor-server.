@@ -513,6 +513,7 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
             values[item.key] = isHome ? item.home : item.away;
           }
         }
+        console.log("CHIAVI STATISTICHE:", Object.keys(values));
 
         let found = false;
 
