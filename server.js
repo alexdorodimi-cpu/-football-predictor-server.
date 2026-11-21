@@ -382,7 +382,18 @@ app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req
     const bttsYes = matrix
       .filter(item => item.home > 0 && item.away > 0)
       .reduce((sum, item) => sum + item.probability, 0);
+const reliability = {
+  "1": getReliability(percent(homeWin), homeSample.length),
+  "X": getReliability(percent(draw), homeSample.length),
+  "2": getReliability(percent(awayWin), awaySample.length),
 
+  "over_1_5": getReliability(percent(over(1)), Math.min(homeSample.length, awaySample.length)),
+  "over_2_5": getReliability(percent(over(2)), Math.min(homeSample.length, awaySample.length)),
+  "over_3_5": getReliability(percent(over(3)), Math.min(homeSample.length, awaySample.length)),
+
+  "btts_yes": getReliability(percent(bttsYes), Math.min(homeSample.length, awaySample.length)),
+  "btts_no": getReliability(percent(1 - bttsYes), Math.min(homeSample.length, awaySample.length))
+};
     const exactScores = [...matrix]
       .sort((a, b) => b.probability - a.probability)
       .slice(0, 5)
