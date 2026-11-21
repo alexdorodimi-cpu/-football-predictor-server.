@@ -54,6 +54,33 @@ function requireAccess(req, res, next) {
   next();
 }
 
+// TEST COLLEGAMENTO DATABASE SUPABASE
+app.get("/api/test-database", requireConfig, requireAccess, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("matches")
+      .select("id")
+      .limit(1);
+
+    if (error) throw error;
+
+    res.json({
+      ok: true,
+      database: "Supabase",
+      connected: true,
+      message: "Collegamento al database riuscito."
+    });
+  } catch (err) {
+    console.error("Errore Supabase:", err.message);
+    res.status(500).json({
+      ok: false,
+      connected: false,
+      error: "Collegamento al database non riuscito."
+    });
+  }
+});
+
+
 async function pitchGet(path, params = {}) {
   const url = new URL(API_BASE + path);
 
