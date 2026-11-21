@@ -130,7 +130,26 @@ function weightedAverage(sample, key) {
 
   return weightedSum / totalWeight;
 }
+// Penalizza i campioni con pochi dati
+  if (sampleSize < 10) {
+    score -= (10 - sampleSize) * 2;
+  }
 
+  score = Math.max(0, Math.min(100, score));
+
+  let level = "BASSA";
+
+  if (score >= 75) {
+    level = "ALTA";
+  } else if (score >= 60) {
+    level = "MEDIA";
+  }
+
+  return {
+    score: Number(score.toFixed(1)),
+    level
+  };
+}
 // DISTRIBUZIONE DI POISSON
 function poissonProbability(lambda, goals) {
   if (lambda <= 0) return goals === 0 ? 1 : 0;
