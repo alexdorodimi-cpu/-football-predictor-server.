@@ -275,10 +275,9 @@ app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req
     const homeId = fixture.home_team.id;
     const awayId = fixture.away_team.id;
 
-    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
-      season,
-      status: "played"
-    });
+   const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+  season
+});
 
     const playedMatches = (leagueData.matches || [])
       .filter(match =>
