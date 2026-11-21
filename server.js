@@ -96,6 +96,35 @@ async function saveMatchToDatabase(match) {
       status: match.status || null
     });
 
+  // SALVATAGGIO PARTITE IN BLOCCO SU SUPABASE
+async function saveMatchesToDatabase(matches) {
+  if (!matches.length) return 0;
+
+  const rows = matches.map(match => ({
+    id: String(match.id),
+    league_id: String(match.league_id),
+    league_name: match.league_name || null,
+    season: String(match.season),
+    home_team: match.home_team,
+    away_team: match.away_team,
+    match_date: match.date || null,
+    home_goals: match.home_goals ?? null,
+    away_goals: match.away_goals ?? null,
+    status: match.status || null
+  }));
+
+  const { error } = await supabase
+    .from("matches")
+    .upsert(rows);
+
+  if (error) {
+    console.error("Errore salvataggio partite:", error.message);
+    throw error;
+  }
+
+  return rows.length;
+}
+
   if (error) {
     console.error("Errore salvataggio partita:", error.message);
     throw error;
@@ -523,6 +552,7 @@ app.get("/api/fixture/:id/odds", requireConfig, requireAccess, (req, res) => {
 
 // CAMPIONATI E PARTITE
 
+
 app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res) => {
   const leagueId = req.params.id;
   const season = req.query.season;
@@ -549,7 +579,7 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
     });
 
     const matches = data.matches || [];
-    let savedMatches = 0;
+    const matchesToSave = [];
     let skippedMatches = 0;
 
     for (const match of matches) {
@@ -566,7 +596,7 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
         continue;
       }
 
-      await saveMatchToDatabase({
+      matchesToSave.push({
         id: match.id,
         league_id: match.league?.id || leagueId,
         league_name:
@@ -581,9 +611,9 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
         away_goals: match.score_away ?? match.away_goals ?? null,
         status: match.status || null
       });
-
-      savedMatches++;
     }
+
+    const savedMatches = await saveMatchesToDatabase(matchesToSave);
 
     res.json({
       ok: true,
@@ -599,6 +629,7 @@ app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res
     handleError(res, err);
   }
 });
+
 
 
 // BACKTEST DEL MODELLO
