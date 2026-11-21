@@ -273,44 +273,85 @@ app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req
   .sort((a, b) => new Date(b.date) - new Date(a.date));
 
     function getTeamSample(teamId) {
-      return playedMatches
-        .filter(match =>
-          match.home_team?.id === teamId || match.away_team?.id === teamId
-        )
-        .slice(0, 10)
-        .map(match => {
-          const isHome = match.home_team?.id === teamId;
-          return {
-            scored: getMatchScore(match, isHome),
-            conceded: getMatchScore(match, !isHome),
-            date: match.date
-          };
-        })
-        .filter(item => item.scored !== null && item.conceded !== null);
-    }
+  return playedMatches
+    .filter(match =>
+      match.home_team?.id === teamId ||
+      match.away_team?.id === teamId
+    )
+    .slice(0, 10)
+    .map(match => {
+      const isHome = match.home_team?.id === teamId;
 
-    const homeSample = getTeamSample(homeId);
-    const awaySample = getTeamSample(awayId);
+      return {
+        scored: getMatchScore(match, isHome),
+        conceded: getMatchScore(match, !isHome),
+        wasHome: isHome,
+        date: match.date
+      };
+    })
+    .filter(item =>
+      item.scored !== null &&
+      item.conceded !== null
+    );
+}
 
-    if (homeSample.length < 5 || awaySample.length < 5) {
-      return res.status(422).json({
-        ok: false,
-        error: "Dati insufficienti: servono almeno 5 partite con risultato valido per ciascuna squadra.",
-        samples: {
-          home: homeSample.length,
-          away: awaySample.length
-        }
-      });
+const homeSample = getTeamSample(homeId);
+const awaySample = getTeamSample(awayId);
+
+if (homeSample.length < 5 || awaySample.length < 5) {
+  return res.status(422).json({
+    ok: false,
+    error: "Dati insufficienti: servono almeno 5 partite con risultato valido per ciascuna squadra.",
+    samples: {
+      home: homeSample.length,
+      away: awaySample.length
     }
+  });
+}
 
     function average(sample, key) {
       return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
     }
 
-    const homeGoalsFor = weightedAverage(homeSample, "scored");
+   
+const homeGoalsFor = weightedAverage(homeSample, "scored");
 const homeGoalsAgainst = weightedAverage(homeSample, "conceded");
 const awayGoalsFor = weightedAverage(awaySample, "scored");
 const awayGoalsAgainst = weightedAverage(awaySample, "conceded");
+
+// Separazione delle partite in casa e in trasferta
+const homeAtHome = homeSample.filter(item => item.wasHome);
+const awayAway = awaySample.filter(item => !item.wasHome);
+
+// Attacco e difesa della squadra di casa
+const homeAttack = homeAtHome.length >= 3
+  ? weightedAverage(homeAtHome, "scored")
+  : homeGoalsFor;
+
+const homeDefense = homeAtHome.length >= 3
+  ? weightedAverage(homeAtHome, "conceded")
+  : homeGoalsAgainst;
+
+// Attacco e difesa della squadra in trasferta
+const awayAttack = awayAway.length >= 3
+  ? weightedAverage(awayAway, "scored")
+  : awayGoalsFor;
+
+const awayDefense = awayAway.length >= 3
+  ? weightedAverage(awayAway, "conceded")
+  : awayGoalsAgainst;
+
+// Stima dei gol con fattore campo
+const expectedHomeGoals = Math.max(
+  0.10,
+  Math.min(5, (homeAttack + awayDefense) / 2)
+);
+
+const expectedAwayGoals = Math.max(
+  0.10,
+  Math.min(5, (awayAttack + homeDefense) / 2)
+);
+
 
     // Stima semplice: media tra produzione offensiva e gol concessi dall'avversaria.
     const expectedHomeGoals = Math.max(
@@ -539,25 +580,29 @@ function weightedAverage(sample, key) {
         )
       );
 
-      function getTeamSample(teamId) {
-        return previousMatches
-          .filter(match =>
-            match.home_team?.id === teamId ||
-            match.away_team?.id === teamId
-          )
-          .sort((a, b) => new Date(b.date) - new Date(a.date))
-          .slice(0, 10)
-          .map(match => {
-            const isHome = match.home_team?.id === teamId;
-            return {
-              scored: getMatchScore(match, isHome),
-              conceded: getMatchScore(match, !isHome)
-            };
-          })
-          .filter(item =>
-            item.scored !== null && item.conceded !== null
-          );
-      }
+    
+function getTeamSample(teamId) {
+  return previousMatches
+    .filter(match =>
+      match.home_team?.id === teamId ||
+      match.away_team?.id === teamId
+    )
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 10)
+    .map(match => {
+      const isHome = match.home_team?.id === teamId;
+
+      return {
+        scored: getMatchScore(match, isHome),
+        conceded: getMatchScore(match, !isHome),
+        wasHome: isHome
+      };
+    })
+    .filter(item =>
+      item.scored !== null &&
+      item.conceded !== null
+    );
+}
 
       const homeSample = getTeamSample(fixture.home_team.id);
       const awaySample = getTeamSample(fixture.away_team.id);
@@ -567,12 +612,45 @@ function weightedAverage(sample, key) {
         continue;
       }
 
-      const homeFor = weightedAverage(homeSample, "scored");
+      
+const homeFor = weightedAverage(homeSample, "scored");
 const homeAgainst = weightedAverage(homeSample, "conceded");
 const awayFor = weightedAverage(awaySample, "scored");
 const awayAgainst = weightedAverage(awaySample, "conceded");
-      const homeLambda = Math.max(0.10, Math.min(5, (homeFor + awayAgainst) / 2));
-      const awayLambda = Math.max(0.10, Math.min(5, (awayFor + homeAgainst) / 2));
+
+// Separazione casa e trasferta
+const homeAtHome = homeSample.filter(item => item.wasHome);
+const awayAway = awaySample.filter(item => !item.wasHome);
+
+// Attacco e difesa della squadra di casa
+const homeAttack = homeAtHome.length >= 3
+  ? weightedAverage(homeAtHome, "scored")
+  : homeFor;
+
+const homeDefense = homeAtHome.length >= 3
+  ? weightedAverage(homeAtHome, "conceded")
+  : homeAgainst;
+
+// Attacco e difesa della squadra ospite
+const awayAttack = awayAway.length >= 3
+  ? weightedAverage(awayAway, "scored")
+  : awayFor;
+
+const awayDefense = awayAway.length >= 3
+  ? weightedAverage(awayAway, "conceded")
+  : awayAgainst;
+
+// Gol attesi con fattore campo
+const homeLambda = Math.max(
+  0.10,
+  Math.min(5, (homeAttack + awayDefense) / 2)
+);
+
+const awayLambda = Math.max(
+  0.10,
+  Math.min(5, (awayAttack + homeDefense) / 2)
+);
+
 
       const matrix = buildGoalModel(homeLambda, awayLambda);
 
