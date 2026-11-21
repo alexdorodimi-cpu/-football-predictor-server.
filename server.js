@@ -390,7 +390,10 @@ const reliability = {
   "over_1_5": getReliability(percent(over(1)), Math.min(homeSample.length, awaySample.length)),
   "over_2_5": getReliability(percent(over(2)), Math.min(homeSample.length, awaySample.length)),
   "over_3_5": getReliability(percent(over(3)), Math.min(homeSample.length, awaySample.length)),
-
+   "under_1_5": getReliability(percent(under(1)), Math.min(homeSample.length, awaySample.length)),
+"under_2_5": getReliability(percent(under(2)), Math.min(homeSample.length, awaySample.length)),
+"under_3_5": getReliability(percent(under(3)), Math.min(homeSample.length, awaySample.length)),
+  
   "btts_yes": getReliability(percent(bttsYes), Math.min(homeSample.length, awaySample.length)),
   "btts_no": getReliability(percent(1 - bttsYes), Math.min(homeSample.length, awaySample.length))
 };
