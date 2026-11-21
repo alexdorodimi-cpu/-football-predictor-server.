@@ -1,3 +1,4 @@
+
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 
@@ -114,6 +115,22 @@ function getMatchScore(match, isHome) {
   return getNumber(value);
 }
 
+// MEDIA PONDERATA: le partite più recenti hanno peso maggiore.
+function weightedAverage(sample, key) {
+  if (!sample.length) return 0;
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+
+  sample.forEach((item, index) => {
+    const weight = Math.pow(0.75, index);
+    weightedSum += item[key] * weight;
+    totalWeight += weight;
+  });
+
+  return weightedSum / totalWeight;
+}
+
 // DISTRIBUZIONE DI POISSON
 function poissonProbability(lambda, goals) {
   if (lambda <= 0) return goals === 0 ? 1 : 0;
@@ -140,7 +157,6 @@ function buildGoalModel(homeLambda, awayLambda) {
     }
   }
 
-  // Normalizza la matrice per compensare la piccola coda oltre 8 gol.
   for (const item of matrix) item.probability /= total;
 
   return matrix;
@@ -198,6 +214,7 @@ app.get("/api/fixtures", requireConfig, requireAccess, async (req, res) => {
     handleError(res, err);
   }
 });
+
 // ROTTE DELLE PARTITE
 function addMatchRoute(route, endpoint) {
   app.get(route, requireConfig, requireAccess, async (req, res) => {
@@ -231,7 +248,7 @@ addMatchRoute("/api/fixture/:id/h2h", "/h2h");
 addMatchRoute("/api/fixture/:id/live", "/live");
 addMatchRoute("/api/fixture/:id/heatmaps", "/heatmaps");
 
-// PRONOSTICI BASATI SULLE ULTIME 10 PARTITE E SULLA DISTRIBUZIONE DI POISSON
+// PRONOSTICI BASATI SULLE ULTIME 10 PARTITE
 app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req, res) => {
   const matchId = req.params.id;
 
@@ -262,73 +279,67 @@ app.get("/api/fixture/:id/predictions", requireConfig, requireAccess, async (req
       season,
       status: "played"
     });
+
     const playedMatches = (leagueData.matches || [])
-  .filter(match =>
-    (match.status === "finished" ||
-     match.status === "completed" ||
-     (getMatchScore(match, true) !== null &&
-      getMatchScore(match, false) !== null)) &&
-    match.date < fixture.date
-  )
-  .sort((a, b) => new Date(b.date) - new Date(a.date));
+      .filter(match =>
+        (match.status === "finished" ||
+         match.status === "completed" ||
+         (getMatchScore(match, true) !== null &&
+          getMatchScore(match, false) !== null)) &&
+        match.date < fixture.date
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
 
     function getTeamSample(teamId) {
-  return playedMatches
-    .filter(match =>
-      match.home_team?.id === teamId ||
-      match.away_team?.id === teamId
-    )
-    .slice(0, 10)
-    .map(match => {
-      const isHome = match.home_team?.id === teamId;
+      return playedMatches
+        .filter(match =>
+          match.home_team?.id === teamId ||
+          match.away_team?.id === teamId
+        )
+        .slice(0, 10)
+        .map(match => {
+          const isHome = match.home_team?.id === teamId;
 
-      return {
-        scored: getMatchScore(match, isHome),
-        conceded: getMatchScore(match, !isHome),
-        wasHome: isHome,
-        date: match.date
-      };
-    })
-    .filter(item =>
-      item.scored !== null &&
-      item.conceded !== null
+          return {
+            scored: getMatchScore(match, isHome),
+            conceded: getMatchScore(match, !isHome),
+            date: match.date
+          };
+        })
+        .filter(item =>
+          item.scored !== null &&
+          item.conceded !== null
+        );
+    }
+
+    const homeSample = getTeamSample(homeId);
+    const awaySample = getTeamSample(awayId);
+
+    if (homeSample.length < 5 || awaySample.length < 5) {
+      return res.status(422).json({
+        ok: false,
+        error: "Dati insufficienti: servono almeno 5 partite con risultato valido per ciascuna squadra.",
+        samples: {
+          home: homeSample.length,
+          away: awaySample.length
+        }
+      });
+    }
+
+    const homeGoalsFor = weightedAverage(homeSample, "scored");
+    const homeGoalsAgainst = weightedAverage(homeSample, "conceded");
+    const awayGoalsFor = weightedAverage(awaySample, "scored");
+    const awayGoalsAgainst = weightedAverage(awaySample, "conceded");
+
+    const expectedHomeGoals = Math.max(
+      0.10,
+      Math.min(5, (homeGoalsFor + awayGoalsAgainst) / 2)
     );
-}
 
-const homeSample = getTeamSample(homeId);
-const awaySample = getTeamSample(awayId);
-
-if (homeSample.length < 5 || awaySample.length < 5) {
-  return res.status(422).json({
-    ok: false,
-    error: "Dati insufficienti: servono almeno 5 partite con risultato valido per ciascuna squadra.",
-    samples: {
-      home: homeSample.length,
-      away: awaySample.length
-    }
-  });
-}
-
-    function average(sample, key) {
-      return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
-    }
-
-   
-const homeGoalsFor = weightedAverage(homeSample, "scored");
-const homeGoalsAgainst = weightedAverage(homeSample, "conceded");
-const awayGoalsFor = weightedAverage(awaySample, "scored");
-const awayGoalsAgainst = weightedAverage(awaySample, "conceded");
-
-// Separazione delle partite in casa e in trasferta
-const expectedHomeGoals = Math.max(
-  0.10,
-  Math.min(5, (homeGoalsFor + awayGoalsAgainst) / 2)
-);
-
-const expectedAwayGoals = Math.max(
-  0.10,
-  Math.min(5, (awayGoalsFor + homeGoalsAgainst) / 2)
-);
+    const expectedAwayGoals = Math.max(
+      0.10,
+      Math.min(5, (awayGoalsFor + homeGoalsAgainst) / 2)
+    );
 
     const matrix = buildGoalModel(expectedHomeGoals, expectedAwayGoals);
 
@@ -364,7 +375,7 @@ const expectedAwayGoals = Math.max(
 
     res.json({
       ok: true,
-      model: "Poisson basato sulle medie gol delle ultime 10 partite",
+      model: "Poisson basato sulle medie ponderate delle ultime 10 partite (peso 0,75)",
       match: {
         id: matchId,
         league: fixture.league.name,
@@ -410,6 +421,7 @@ const expectedAwayGoals = Math.max(
     handleError(res, err);
   }
 });
+
 // QUOTE - FONTE SEPARATA NON ANCORA COLLEGATA
 app.get("/api/fixture/:id/odds", requireConfig, requireAccess, (req, res) => {
   res.status(501).json({
@@ -420,47 +432,9 @@ app.get("/api/fixture/:id/odds", requireConfig, requireAccess, (req, res) => {
 
 // CAMPIONATI E PARTITE
 app.get("/api/league/:id/matches", requireConfig, requireAccess, async (req, res) => {
-  const id = req.params.id;
+  const leagueId = req.params.id;
   const season = req.query.season;
-  const status = req.query.status || "played";
-
-  if (!validLeagueId(id)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID campionato non valido."
-    });
-  }
-
-  if (!["played", "upcoming", "all"].includes(status)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Stato non valido."
-    });
-  }
-
-  try {
-    const data = await pitchGet(`/v1/leagues/${id}/matches`, {
-      season,
-      status
-    });
-
-    res.json({
-      ok: true,
-      league: data.league,
-      results: data.matches?.length || 0,
-      response: data.matches || []
-    });
-  } catch (err) {
-    handleError(res, err);
-  }
-});
-
-// BACKTEST STORICO - verifica i pronostici
-
-app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res) => {
-  const leagueId = req.params.leagueId;
-  const season = req.query.season || "2026/2027";
-  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const status = req.query.status || "all";
 
   if (!validLeagueId(leagueId)) {
     return res.status(400).json({
@@ -469,13 +443,59 @@ app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res
     });
   }
 
+  if (!season) {
+    return res.status(400).json({
+      ok: false,
+      error: "Inserisci la stagione."
+    });
+  }
+
   try {
     const data = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status
+    });
+
+    res.json({
+      ok: true,
+      league_id: leagueId,
+      season,
+      requested_matches: data.matches?.length || 0,
+      matches: data.matches || []
+    });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// BACKTEST DEL MODELLO
+app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res) => {
+  const leagueId = req.params.leagueId;
+  const season = req.query.season;
+  const requestedLimit = Number.parseInt(req.query.limit || "100", 10);
+  const limit = Math.max(1, Math.min(200, requestedLimit || 100));
+
+  if (!validLeagueId(leagueId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID campionato non valido."
+    });
+  }
+
+  if (!season) {
+    return res.status(400).json({
+      ok: false,
+      error: "Inserisci la stagione."
+    });
+  }
+
+  try {
+    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
       season,
       status: "played"
     });
 
-    const allMatches = (data.matches || [])
+    const allMatches = (leagueData.matches || [])
       .filter(match =>
         (match.status === "finished" ||
          match.status === "completed" ||
@@ -487,209 +507,215 @@ app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res
 
     const testMatches = allMatches.slice(-limit);
 
-    
-const markets = {
-  "1X2": { total: 0, correct: 0 },
-  "Over/Under 1.5": { total: 0, correct: 0 },
-  "Over/Under 2.5": { total: 0, correct: 0 },
-  "Over/Under 3.5": { total: 0, correct: 0 },
-  "Goal/No Goal": { total: 0, correct: 0 },
-  "Risultato esatto": { total: 0, correct: 0 }
-};
+    const markets = [
+      "1X2",
+      "over_1_5",
+      "over_2_5",
+      "over_3_5",
+      "btts"
+    ];
 
+    const results = {};
 
-    const confidence95 = {
-      total: 0,
-      correct: 0
-    };
-
-    const results = [];
-    let skipped = 0;
-
-    function average(sample, key) {
-      return sample.reduce((sum, item) => sum + item[key], 0) / sample.length;
+    for (const market of markets) {
+      results[market] = {
+        evaluated: 0,
+        correct: 0,
+        high_confidence: 0,
+        high_confidence_correct: 0
+      };
     }
-    
-function weightedAverage(sample, key) {
-  if (!sample.length) return 0;
 
-  let weightedSum = 0;
-  let totalWeight = 0;
+    let evaluatedMatches = 0;
+    let skippedMatches = 0;
 
-  sample.forEach((item, index) => {
-    const weight = Math.pow(0.75, index);
+    function recordMarket(market, prediction, actual, probability) {
+      results[market].evaluated++;
 
-    weightedSum += item[key] * weight;
-    totalWeight += weight;
-  });
-
-  return weightedSum / totalWeight;
-}
-
-    function recordMarket(name, probability, success) {
-      markets[name].total++;
-      if (success) markets[name].correct++;
+      if (prediction === actual) {
+        results[market].correct++;
+      }
 
       if (probability >= 0.95) {
-        confidence95.total++;
-        if (success) confidence95.correct++;
+        results[market].high_confidence++;
+
+        if (prediction === actual) {
+          results[market].high_confidence_correct++;
+        }
       }
     }
 
     for (const fixture of testMatches) {
-      const previousMatches = allMatches.filter(match =>
-        match.date < fixture.date &&
-        (
-          match.home_team?.id === fixture.home_team?.id ||
-          match.away_team?.id === fixture.home_team?.id ||
-          match.home_team?.id === fixture.away_team?.id ||
-          match.away_team?.id === fixture.away_team?.id
-        )
-      );
+      const homeId = fixture.home_team?.id;
+      const awayId = fixture.away_team?.id;
 
-    
-function getTeamSample(teamId) {
-  return previousMatches
-    .filter(match =>
-      match.home_team?.id === teamId ||
-      match.away_team?.id === teamId
-    )
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 10)
-    .map(match => {
-      const isHome = match.home_team?.id === teamId;
-
-      return {
-        scored: getMatchScore(match, isHome),
-        conceded: getMatchScore(match, !isHome),
-        wasHome: isHome
-      };
-    })
-    .filter(item =>
-      item.scored !== null &&
-      item.conceded !== null
-    );
-}
-
-      const homeSample = getTeamSample(fixture.home_team.id);
-      const awaySample = getTeamSample(fixture.away_team.id);
-
-      if (homeSample.length < 5 || awaySample.length < 5) {
-        skipped++;
+      if (!homeId || !awayId) {
+        skippedMatches++;
         continue;
       }
 
-      
-const homeFor = weightedAverage(homeSample, "scored");
-const homeAgainst = weightedAverage(homeSample, "conceded");
-const awayFor = weightedAverage(awaySample, "scored");
-const awayAgainst = weightedAverage(awaySample, "conceded");
+      const actualHome = getMatchScore(fixture, true);
+      const actualAway = getMatchScore(fixture, false);
 
-// Separazione casa e trasferta
-const homeLambda = Math.max(
-  0.10,
-  Math.min(5, (homeFor + awayAgainst) / 2)
-);
+      if (actualHome === null || actualAway === null) {
+        skippedMatches++;
+        continue;
+      }
 
-const awayLambda = Math.max(
-  0.10,
-  Math.min(5, (awayFor + homeAgainst) / 2)
-);
+      // Usiamo soltanto partite precedenti alla partita da valutare.
+      const previousMatches = allMatches
+        .filter(match =>
+          match.date < fixture.date &&
+          (
+            match.home_team?.id === homeId ||
+            match.away_team?.id === homeId ||
+            match.home_team?.id === awayId ||
+            match.away_team?.id === awayId
+          )
+        )
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      function getTeamSample(teamId) {
+        return previousMatches
+          .filter(match =>
+            match.home_team?.id === teamId ||
+            match.away_team?.id === teamId
+          )
+          .slice(0, 10)
+          .map(match => {
+            const isHome = match.home_team?.id === teamId;
+
+            return {
+              scored: getMatchScore(match, isHome),
+              conceded: getMatchScore(match, !isHome)
+            };
+          })
+          .filter(item =>
+            item.scored !== null &&
+            item.conceded !== null
+          );
+      }
+
+      const homeSample = getTeamSample(homeId);
+      const awaySample = getTeamSample(awayId);
+
+      if (homeSample.length < 5 || awaySample.length < 5) {
+        skippedMatches++;
+        continue;
+      }
+
+      const homeFor = weightedAverage(homeSample, "scored");
+      const homeAgainst = weightedAverage(homeSample, "conceded");
+      const awayFor = weightedAverage(awaySample, "scored");
+      const awayAgainst = weightedAverage(awaySample, "conceded");
+
+      const homeLambda = Math.max(
+        0.10,
+        Math.min(5, (homeFor + awayAgainst) / 2)
+      );
+
+      const awayLambda = Math.max(
+        0.10,
+        Math.min(5, (awayFor + homeAgainst) / 2)
+      );
 
       const matrix = buildGoalModel(homeLambda, awayLambda);
 
-      const probability = condition =>
-        matrix
-          .filter(condition)
-          .reduce((sum, item) => sum + item.probability, 0);
+      const homeWin = matrix
+        .filter(item => item.home > item.away)
+        .reduce((sum, item) => sum + item.probability, 0);
 
-      const pHome = probability(item => item.home > item.away);
-      const pDraw = probability(item => item.home === item.away);
-      const pAway = probability(item => item.home < item.away);
+      const draw = matrix
+        .filter(item => item.home === item.away)
+        .reduce((sum, item) => sum + item.probability, 0);
 
-      const pOver15 = probability(item => item.home + item.away > 1);
-      const pOver25 = probability(item => item.home + item.away > 2);
-      const pOver35 = probability(item => item.home + item.away > 3);
-      const pGoal = probability(item => item.home > 0 && item.away > 0);
+      const awayWin = matrix
+        .filter(item => item.home < item.away)
+        .reduce((sum, item) => sum + item.probability, 0);
 
-      const predictions = [
-        { name: "1", probability: pHome, success: getMatchScore(fixture, true) > getMatchScore(fixture, false) },
-        { name: "X", probability: pDraw, success: getMatchScore(fixture, true) === getMatchScore(fixture, false) },
-        { name: "2", probability: pAway, success: getMatchScore(fixture, true) < getMatchScore(fixture, false) }
-      ];
+      const over = line => matrix
+        .filter(item => item.home + item.away > line)
+        .reduce((sum, item) => sum + item.probability, 0);
 
-      predictions.sort((a, b) => b.probability - a.probability);
-      const best1X2 = predictions[0];
+      const bttsYes = matrix
+        .filter(item => item.home > 0 && item.away > 0)
+        .reduce((sum, item) => sum + item.probability, 0);
 
-      recordMarket("1X2", best1X2.probability, best1X2.success);
+      const probabilities = {
+        "1": homeWin,
+        "X": draw,
+        "2": awayWin,
+        over_1_5: over(1),
+        over_2_5: over(2),
+        over_3_5: over(3),
+        btts: bttsYes
+      };
 
-      const actualHome = getMatchScore(fixture, true);
-      const actualAway = getMatchScore(fixture, false);
-      const actualTotal = actualHome + actualAway;
-      const actualGoal = actualHome > 0 && actualAway > 0;
+      const best1X2 = Object.entries({
+        "1": homeWin,
+        "X": draw,
+        "2": awayWin
+      }).sort((a, b) => b[1] - a[1])[0];
 
- const predictedOver15 = pOver15 >= 0.5;
-
-recordMarket(
-  "Over/Under 1.5",
-  Math.max(pOver15, 1 - pOver15),
-  predictedOver15 ? actualTotal > 1 : actualTotal <= 1
-);
-const predictedOver25 = pOver25 >= 0.5;
-
-recordMarket(
-  "Over/Under 2.5",
-  Math.max(pOver25, 1 - pOver25),
-  predictedOver25 ? actualTotal > 2 : actualTotal <= 2
-);
-
-const predictedOver35 = pOver35 >= 0.5;
-
-recordMarket(
-  "Over/Under 3.5",
-  Math.max(pOver35, 1 - pOver35),
-  predictedOver35 ? actualTotal > 3 : actualTotal <= 3
-);
-
-const predictedGoal = pGoal >= 0.5;
-
-recordMarket(
-  "Goal/No Goal",
-  Math.max(pGoal, 1 - pGoal),
-  predictedGoal ? actualGoal : !actualGoal
-);
-      const bestScore = [...matrix]
-        .sort((a, b) => b.probability - a.probability)[0];
+      const actual1X2 =
+        actualHome > actualAway ? "1" :
+        actualHome === actualAway ? "X" : "2";
 
       recordMarket(
-        "Risultato esatto",
-        bestScore.probability,
-        bestScore.home === actualHome && bestScore.away === actualAway
+        "1X2",
+        best1X2[0],
+        actual1X2,
+        best1X2[1]
       );
 
-      results.push({
-        date: fixture.date,
-        match: `${fixture.home_team.name} - ${fixture.away_team.name}`,
-        actual: `${actualHome}-${actualAway}`,
-        predicted_1x2: best1X2.name,
-        predicted_1x2_probability: percent(best1X2.probability),
-        predicted_score: `${bestScore.home}-${bestScore.away}`,
-        predicted_score_probability: percent(bestScore.probability),
-        samples: {
-          home: homeSample.length,
-          away: awaySample.length
-        }
-      });
+      const actualTotal = actualHome + actualAway;
+
+      recordMarket(
+        "over_1_5",
+        probabilities.over_1_5 >= 0.5,
+        actualTotal > 1,
+        Math.max(probabilities.over_1_5, 1 - probabilities.over_1_5)
+      );
+
+      recordMarket(
+        "over_2_5",
+        probabilities.over_2_5 >= 0.5,
+        actualTotal > 2,
+        Math.max(probabilities.over_2_5, 1 - probabilities.over_2_5)
+      );
+
+      recordMarket(
+        "over_3_5",
+        probabilities.over_3_5 >= 0.5,
+        actualTotal > 3,
+        Math.max(probabilities.over_3_5, 1 - probabilities.over_3_5)
+      );
+
+      recordMarket(
+        "btts",
+        probabilities.btts >= 0.5,
+        actualHome > 0 && actualAway > 0,
+        Math.max(probabilities.btts, 1 - probabilities.btts)
+      );
+
+      evaluatedMatches++;
     }
 
-    const summary = {};
+    const accuracy = {};
 
-    for (const [name, stats] of Object.entries(markets)) {
-      summary[name] = {
-        evaluated: stats.total,
-        correct: stats.correct,
-        accuracy: stats.total
-          ? percent(stats.correct / stats.total)
+    for (const market of markets) {
+      const item = results[market];
+
+      accuracy[market] = {
+        evaluated: item.evaluated,
+        correct: item.correct,
+        accuracy: item.evaluated
+          ? percent(item.correct / item.evaluated)
+          : 0,
+        high_confidence: item.high_confidence,
+        high_confidence_correct: item.high_confidence_correct,
+        high_confidence_accuracy: item.high_confidence
+          ? percent(item.high_confidence_correct / item.high_confidence)
           : null
       };
     }
@@ -700,17 +726,10 @@ recordMarket(
       league_id: leagueId,
       season,
       requested_matches: testMatches.length,
-      evaluated_matches: results.length,
-      skipped_matches: skipped,
-      accuracy_by_market: summary,
-      high_confidence_95: {
-        evaluated: confidence95.total,
-        correct: confidence95.correct,
-        accuracy: confidence95.total
-          ? percent(confidence95.correct / confidence95.total)
-          : null
-      },
-      results
+      evaluated_matches: evaluatedMatches,
+      skipped_matches: skippedMatches,
+      accuracy_by_market: accuracy,
+      note: "Il backtest misura i risultati storici del modello e non garantisce prestazioni future."
     });
 
   } catch (err) {
@@ -718,48 +737,51 @@ recordMarket(
   }
 });
 
-
 // MEDIE STATISTICHE DELLE SQUADRE
 app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res) => {
   const teamId = req.params.id;
-  const leagueId = req.query.league;
+  const leagueId = req.query.league_id;
   const season = req.query.season;
-  const last = Number(req.query.last || 10);
+  const last = Math.max(1, Math.min(20, Number.parseInt(req.query.last || "10", 10) || 10));
 
-  if (!validTeamId(teamId)) {
+  if (!validTeamId(teamId) || !validLeagueId(leagueId)) {
     return res.status(400).json({
       ok: false,
-      error: "ID squadra non valido."
+      error: "ID squadra o campionato non valido."
     });
   }
 
-  if (!validLeagueId(leagueId || "")) {
+  if (!season) {
     return res.status(400).json({
       ok: false,
-      error: "ID campionato non valido."
-    });
-  }
-
-  if (!season || !Number.isInteger(last) || last < 1 || last > 10) {
-    return res.status(400).json({
-      ok: false,
-      error: "Stagione o numero di partite non valido."
+      error: "Inserisci la stagione."
     });
   }
 
   try {
-    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+    const data = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
       season,
       status: "played"
     });
 
-    const matches = (leagueData.matches || [])
+    const matches = (data.matches || [])
       .filter(match =>
         match.home_team?.id === teamId ||
         match.away_team?.id === teamId
       )
+      .filter(match =>
+        getMatchScore(match, true) !== null &&
+        getMatchScore(match, false) !== null
+      )
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, last);
+
+    if (!matches.length) {
+      return res.status(404).json({
+        ok: false,
+        error: "Nessuna partita trovata per questa squadra."
+      });
+    }
 
     const stats = {
       goals_for: 0,
@@ -774,247 +796,77 @@ app.get("/api/team/:id/averages", requireConfig, requireAccess, async (req, res)
       possession: 0
     };
 
-    const counts = {};
-    for (const key of Object.keys(stats)) counts[key] = 0;
-
-    const keys = {
-      corners: ["corners"],
-      total_shots: ["total_shots"],
-      shots_on_target: ["ShotsOnTarget", "shots_on_target", "shots_on_goal"],
-      yellow_cards: ["yellow_cards"],
-      red_cards: ["red_cards"],
-      fouls: ["fouls"],
-      expected_goals: ["expected_goals"],
-      possession: ["BallPossesion", "ball_possession"]
+    const counts = {
+      corners: 0,
+      total_shots: 0,
+      shots_on_target: 0,
+      yellow_cards: 0,
+      red_cards: 0,
+      fouls: 0,
+      expected_goals: 0,
+      possession: 0
     };
-
-    let statsMatches = 0;
 
     for (const match of matches) {
       const isHome = match.home_team?.id === teamId;
-      const goalsFor = getMatchScore(match, isHome);
-      const goalsAgainst = getMatchScore(match, !isHome);
 
-      if (goalsFor !== null) {
-        stats.goals_for += goalsFor;
-        counts.goals_for++;
-      }
-
-      if (goalsAgainst !== null) {
-        stats.goals_against += goalsAgainst;
-        counts.goals_against++;
-      }
+      stats.goals_for += getMatchScore(match, isHome);
+      stats.goals_against += getMatchScore(match, !isHome);
 
       try {
-        const data = await pitchGet(`/v1/matches/${match.id}/stats`);
-        const periods = data?.periods || [];
-        const period = periods.find(p =>
-          String(p.period || p.key || p.name || "").toLowerCase() === "all"
+        const matchStats = await pitchGet(`/v1/matches/${match.id}/stats`);
+        const allStats = matchStats?.statistics || matchStats?.stats || [];
+
+        const teamStats = allStats.find(item =>
+          item.team?.id === teamId ||
+          item.team_id === teamId
         );
 
-        if (!period) {
-          console.log("Periodo All non trovato:", match.id);
-          continue;
-        }
+        if (!teamStats) continue;
 
-        const values = {};
+        const values = teamStats.statistics || teamStats.stats || teamStats;
 
-        for (const group of period.groups || []) {
-          for (const item of group.items || []) {
-            values[item.key] = isHome ? item.home : item.away;
+        const aliases = {
+          corners: ["corners", "corner_kicks"],
+          total_shots: ["total_shots", "shots"],
+          shots_on_target: ["shots_on_target", "shots_on_goal"],
+          yellow_cards: ["yellow_cards"],
+          red_cards: ["red_cards"],
+          fouls: ["fouls"],
+          expected_goals: ["expected_goals", "xg"],
+          possession: ["possession", "ball_possession"]
+        };
+
+        for (const [key, possibleNames] of Object.entries(aliases)) {
+          let value = null;
+
+          for (const name of possibleNames) {
+            value = getNumber(values[name]);
+
+            if (value !== null) break;
+          }
+
+          if (value !== null) {
+            stats[key] += value;
+            counts[key]++;
           }
         }
-
-        let found = false;
-
-        for (const [name, possibleKeys] of Object.entries(keys)) {
-          const foundKey = possibleKeys.find(key =>
-            values[key] !== undefined && values[key] !== null
-          );
-
-          if (!foundKey) continue;
-
-          const value = getNumber(values[foundKey]);
-          if (value === null) continue;
-
-          stats[name] += value;
-          counts[name]++;
-          found = true;
-        }
-
-        if (found) statsMatches++;
-
-      } catch (error) {
-        console.error("Errore statistiche partita", match.id, error.message);
+      } catch (err) {
+        console.error("Statistiche partita non disponibili:", match.id, err.message);
       }
     }
 
     const averages = {};
-    for (const [key, total] of Object.entries(stats)) {
-      averages[key] = counts[key]
-        ? Number((total / counts[key]).toFixed(2))
+
+    for (const key of Object.keys(stats)) {
+      const divisor = key === "goals_for" || key === "goals_against"
+        ? matches.length
+        : counts[key];
+
+      averages[key] = divisor
+        ? Number((stats[key] / divisor).toFixed(2))
         : null;
     }
-
-    res.json({
-      ok: true,
-      team: {
-        id: teamId,
-        name: matches[0]
-          ? (matches[0].home_team?.id === teamId
-              ? matches[0].home_team.name
-              : matches[0].away_team.name)
-          : teamId
-      },
-      league_id: leagueId,
-      season,
-      matches_requested: last,
-      matches_analyzed: matches.length,
-      stats_matches_analyzed: statsMatches,
-      averages,
-            sample_counts: counts,
-      matches: matches.map(match => ({
-        id: match.id,
-        date: match.date,
-        home_team: match.home_team?.name,
-        away_team: match.away_team?.name,
-        score_home: match.score_home ?? match.home_score,
-        score_away: match.score_away ?? match.away_score
-      }))
-    });
-
-  } catch (err) {
-    handleError(res, err);
-  }
-});
-
-// STATISTICHE INDIVIDUALI DEI GIOCATORI
-app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (req, res) => {
-  const teamId = req.params.id;
-  const leagueId = req.query.league;
-  const season = req.query.season;
-  const last = Number(req.query.last || 10);
-
-  if (!validTeamId(teamId)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID squadra non valido."
-    });
-  }
-
-  if (!validLeagueId(leagueId || "")) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID campionato non valido."
-    });
-  }
-
-  if (!season || !Number.isInteger(last) || last < 1 || last > 10) {
-    return res.status(400).json({
-      ok: false,
-      error: "Stagione o numero di partite non valido."
-    });
-  }
-
-  try {
-    const leagueData = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
-      season,
-      status: "played"
-    });
-
-    const matches = (leagueData.matches || [])
-      .filter(match =>
-        match.home_team?.id === teamId ||
-        match.away_team?.id === teamId
-      )
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, last);
-
-    const players = {};
-    let matchesWithPlayerData = 0;
-
-    for (const match of matches) {
-      try {
-        const data = await pitchGet(`/v1/matches/${match.id}/players`);
-        if (!Array.isArray(data)) continue;
-
-        let foundPlayers = false;
-
-        for (const entry of data) {
-          if (entry.team_id !== teamId || !entry.player?.id) continue;
-
-          foundPlayers = true;
-          const id = entry.player.id;
-
-          if (!players[id]) {
-            players[id] = {
-              id,
-              name: entry.player.name,
-              appearances: 0,
-              stats: {}
-            };
-          }
-
-          const player = players[id];
-          player.appearances++;
-
-          for (const group of entry.stats || []) {
-            for (const [label, item] of Object.entries(group.stats || {})) {
-              const statKey = item.key;
-              const stat = item.stat || {};
-              const value = Number(stat.value);
-
-              if (!statKey || !Number.isFinite(value)) continue;
-
-              if (!player.stats[statKey]) {
-                player.stats[statKey] = {
-                  label,
-                  total: 0,
-                  samples: 0,
-                  attempts: 0
-                };
-              }
-
-              player.stats[statKey].total += value;
-              player.stats[statKey].samples++;
-
-              const attempts = Number(stat.total);
-              if (Number.isFinite(attempts)) {
-                player.stats[statKey].attempts += attempts;
-              }
-            }
-          }
-        }
-
-        if (foundPlayers) matchesWithPlayerData++;
-
-      } catch (error) {
-        console.error("Errore statistiche giocatori", match.id, error.message);
-      }
-    }
-
-    const result = Object.values(players).map(player => {
-      const averages = {};
-
-      for (const [key, stat] of Object.entries(player.stats)) {
-        averages[key] = {
-          label: stat.label,
-          average: Number((stat.total / stat.samples).toFixed(2)),
-          total: stat.total,
-          samples: stat.samples,
-          attempts: stat.attempts
-        };
-      }
-
-      return {
-        id: player.id,
-        name: player.name,
-        appearances: player.appearances,
-        stats: averages
-      };
-    });
-
-    result.sort((a, b) => b.appearances - a.appearances);
 
     res.json({
       ok: true,
@@ -1023,8 +875,121 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
       season,
       matches_requested: last,
       matches_analyzed: matches.length,
-      matches_with_player_data: matchesWithPlayerData,
-      players_found: result.length,
+      stats_matches_analyzed: Math.max(...Object.values(counts)),
+      averages
+    });
+
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// MEDIE STATISTICHE DEI GIOCATORI
+app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (req, res) => {
+  const teamId = req.params.id;
+  const leagueId = req.query.league_id;
+  const season = req.query.season;
+  const last = Math.max(1, Math.min(20, Number.parseInt(req.query.last || "10", 10) || 10));
+
+  if (!validTeamId(teamId) || !validLeagueId(leagueId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "ID squadra o campionato non valido."
+    });
+  }
+
+  if (!season) {
+    return res.status(400).json({
+      ok: false,
+      error: "Inserisci la stagione."
+    });
+  }
+
+  try {
+    const data = await pitchGet(`/v1/leagues/${leagueId}/matches`, {
+      season,
+      status: "played"
+    });
+
+    const matches = (data.matches || [])
+      .filter(match =>
+        match.home_team?.id === teamId ||
+        match.away_team?.id === teamId
+      )
+      .filter(match =>
+        getMatchScore(match, true) !== null &&
+        getMatchScore(match, false) !== null
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, last);
+
+    const players = {};
+
+    for (const match of matches) {
+      try {
+        const playerData = await pitchGet(`/v1/matches/${match.id}/players`);
+        const list = playerData?.players || playerData?.statistics || [];
+
+        for (const item of list) {
+          const player = item.player || item;
+          const playerId = player.id;
+
+          if (!playerId) continue;
+
+          const playerName = player.name || "Giocatore";
+
+          if (!players[playerId]) {
+            players[playerId] = {
+              id: playerId,
+              name: playerName,
+              matches: 0,
+              minutes: 0,
+              goals: 0,
+              assists: 0,
+              shots: 0,
+              shots_on_target: 0,
+              yellow_cards: 0,
+              red_cards: 0
+            };
+          }
+
+          const entry = players[playerId];
+          const values = item.statistics || item.stats || item;
+
+          entry.matches++;
+
+          entry.minutes += getNumber(values.minutes) || 0;
+          entry.goals += getNumber(values.goals) || 0;
+          entry.assists += getNumber(values.assists) || 0;
+          entry.shots += getNumber(values.shots) || 0;
+          entry.shots_on_target += getNumber(values.shots_on_target) || 0;
+          entry.yellow_cards += getNumber(values.yellow_cards) || 0;
+          entry.red_cards += getNumber(values.red_cards) || 0;
+        }
+      } catch (err) {
+        console.error("Statistiche giocatori non disponibili:", match.id, err.message);
+      }
+    }
+
+    const result = Object.values(players)
+      .map(player => ({
+        ...player,
+        averages: {
+          minutes: Number((player.minutes / player.matches).toFixed(2)),
+          goals: Number((player.goals / player.matches).toFixed(2)),
+          assists: Number((player.assists / player.matches).toFixed(2)),
+          shots: Number((player.shots / player.matches).toFixed(2)),
+          shots_on_target: Number((player.shots_on_target / player.matches).toFixed(2))
+        }
+      }))
+      .sort((a, b) => b.goals - a.goals);
+
+    res.json({
+      ok: true,
+      team_id: teamId,
+      league_id: leagueId,
+      season,
+      matches_analyzed: matches.length,
       players: result
     });
 
@@ -1035,7 +1000,7 @@ app.get("/api/team/:id/player-averages", requireConfig, requireAccess, async (re
 
 // GESTIONE ERRORI
 app.use((err, req, res, next) => {
-  console.error("Errore server:", err.message);
+  console.error("Errore server:", err);
 
   res.status(500).json({
     ok: false,
@@ -1043,11 +1008,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// FILE FRONTEND
+// FILE DEL SITO WEB
 app.use(express.static("public"));
 
 // AVVIO SERVER
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`Football Predictor Server attivo sulla porta ${PORT}`);
 });
-      
