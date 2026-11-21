@@ -152,7 +152,7 @@ function validTeamId(id) {
 }
 
 function validLeagueId(id) {
-  return /^l_[A-Za-z0-9]{6}$/.test(id);
+  return /^l_[A-Za-z0-9]{6}$/.test(String(id || "").trim());
 }
 
 function getNumber(value) {
