@@ -479,14 +479,20 @@ app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res
 
     const testMatches = allMatches.slice(-limit);
 
-    const markets = {
-      "1X2": { total: 0, correct: 0 },
-      "Over 1.5": { total: 0, correct: 0 },
-      "Over 2.5": { total: 0, correct: 0 },
-      "Over 3.5": { total: 0, correct: 0 },
-      "Goal": { total: 0, correct: 0 },
-      "Risultato esatto": { total: 0, correct: 0 }
-    };
+    
+const markets = {
+  "1X2": { total: 0, correct: 0 },
+  "Over 1.5": { total: 0, correct: 0 },
+  "Under 1.5": { total: 0, correct: 0 },
+  "Over 2.5": { total: 0, correct: 0 },
+  "Under 2.5": { total: 0, correct: 0 },
+  "Over 3.5": { total: 0, correct: 0 },
+  "Under 3.5": { total: 0, correct: 0 },
+  "Goal": { total: 0, correct: 0 },
+  "No Goal": { total: 0, correct: 0 },
+  "Risultato esatto": { total: 0, correct: 0 }
+};
+
 
     const confidence95 = {
       total: 0,
@@ -589,26 +595,17 @@ app.get("/api/backtest/:leagueId", requireConfig, requireAccess, async (req, res
       const actualTotal = actualHome + actualAway;
       const actualGoal = actualHome > 0 && actualAway > 0;
 
-      recordMarket("Over 1.5",
-        Math.max(pOver15, 1 - pOver15),
-        pOver15 >= 0.5 ? actualTotal > 1 : actualTotal <= 1
-      );
+    recordMarket("Over 1.5", pOver15, actualTotal > 1);
+recordMarket("Under 1.5", 1 - pOver15, actualTotal <= 1);
 
-      recordMarket("Over 2.5",
-        Math.max(pOver25, 1 - pOver25),
-        pOver25 >= 0.5 ? actualTotal > 2 : actualTotal <= 2
-      );
+recordMarket("Over 2.5", pOver25, actualTotal > 2);
+recordMarket("Under 2.5", 1 - pOver25, actualTotal <= 2);
 
-      recordMarket("Over 3.5",
-        Math.max(pOver35, 1 - pOver35),
-        pOver35 >= 0.5 ? actualTotal > 3 : actualTotal <= 3
-      );
+recordMarket("Over 3.5", pOver35, actualTotal > 3);
+recordMarket("Under 3.5", 1 - pOver35, actualTotal <= 3);
 
-      recordMarket("Goal",
-        Math.max(pGoal, 1 - pGoal),
-        pGoal >= 0.5 ? actualGoal : !actualGoal
-      );
-
+recordMarket("Goal", pGoal, actualGoal);
+recordMarket("No Goal", 1 - pGoal, !actualGoal);
       const bestScore = [...matrix]
         .sort((a, b) => b.probability - a.probability)[0];
 
