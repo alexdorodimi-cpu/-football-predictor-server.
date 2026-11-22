@@ -4,7 +4,8 @@ const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
-
+console.log("SPORTAPI_KEY presente:", Boolean(process.env.SPORTAPI_KEY));
+console.log("SPORTAPI_KEY lunghezza:", process.env.SPORTAPI_KEY?.length || 0);
 const PORT = process.env.PORT || 10000;
 const SPORTAPI_URL = "https://sportapi.ai/api";
 
