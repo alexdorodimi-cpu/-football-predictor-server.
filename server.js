@@ -1527,6 +1527,7 @@ app.get(
 // MEDIE E STATISTICHE SQUADRA
 // ==========================================
 
+
 app.get(
   "/api/team/:id/averages",
   requireSportApi,
@@ -1568,7 +1569,7 @@ app.get(
       if (!teamName) {
         return res.status(404).json({
           ok: false,
-          error: "Squadra non trovata nella risposta di PitchAPI."
+          error: "Squadra non trovata."
         });
       }
 
@@ -1597,10 +1598,8 @@ app.get(
             .toLowerCase();
 
           return (
-            (home === normalizedTeamName ||
-             away === normalizedTeamName) &&
-            getNumber(match.home_goals) !== null &&
-            getNumber(match.away_goals) !== null
+            home === normalizedTeamName ||
+            away === normalizedTeamName
           );
         })
         .slice(0, limit);
@@ -1611,6 +1610,31 @@ app.get(
       let draws = 0;
       let losses = 0;
       let analyzed = 0;
+
+      const statSamples = {
+        corners: [],
+        total_shots: [],
+        shots_on_target: [],
+        yellow_cards: [],
+        red_cards: [],
+        fouls: [],
+        expected_goals: [],
+        possession: []
+      };
+
+      let statsMatchesAnalyzed = 0;
+      let statsMatchesFailed = 0;
+
+      const statKeys = {
+        corners: "corners",
+        total_shots: "total_shots",
+        shots_on_target: "ShotsOnTarget",
+        yellow_cards: "yellow_cards",
+        red_cards: "red_cards",
+        fouls: "fouls",
+        expected_goals: "expected_goals",
+        possession: "BallPossesion"
+      };
 
       for (const match of matches) {
         const isHome =
@@ -1637,6 +1661,91 @@ app.get(
         if (scored > conceded) wins++;
         else if (scored === conceded) draws++;
         else losses++;
+
+        // Recupera le statistiche della partita da PitchAPI.
+        try {
+          if (!match.id) continue;
+
+          const statsResponse = await sportGet(
+            `/matches/${encodeURIComponent(match.id)}/stats`
+          );
+
+          const periods =
+            statsResponse?.data?.periods ||
+            statsResponse?.response?.data?.periods ||
+            statsResponse?.periods ||
+            [];
+
+          const allPeriod = periods.find(
+            period =>
+              String(period.period).toLowerCase() === "all"
+          );
+
+          if (!allPeriod) {
+            statsMatchesFailed++;
+            continue;
+          }
+
+          const items = allPeriod.groups
+            ?.flatMap(group => group.items || []) || [];
+
+          const values = {};
+
+          for (const [field, apiKey] of Object.entries(statKeys)) {
+            const item = items.find(
+              stat => stat.key === apiKey
+            );
+
+            if (!item) {
+              values[field] = null;
+              continue;
+            }
+
+            const rawValue = isHome
+              ? item.home
+              : item.away;
+
+            values[field] = getNumber(rawValue);
+          }
+
+          let foundStats = false;
+
+          for (const field of Object.keys(statKeys)) {
+            if (values[field] !== null) {
+              statSamples[field].push(values[field]);
+              foundStats = true;
+            }
+          }
+
+          if (foundStats) {
+            statsMatchesAnalyzed++;
+          } else {
+            statsMatchesFailed++;
+          }
+        } catch (statsError) {
+          statsMatchesFailed++;
+          console.error(
+            `Statistiche non disponibili per ${match.id}:`,
+            statsError.message
+          );
+        }
+      }
+
+      function calculateWeightedStat(values) {
+        if (!values.length) return null;
+
+        let weightedSum = 0;
+        let totalWeight = 0;
+
+        values.forEach((value, index) => {
+          const weight = Math.pow(0.75, index);
+          weightedSum += value * weight;
+          totalWeight += weight;
+        });
+
+        return totalWeight
+          ? Number((weightedSum / totalWeight).toFixed(2))
+          : null;
       }
 
       const averageGoalsFor = analyzed
@@ -1652,14 +1761,15 @@ app.get(
         goals_against: averageGoalsAgainst,
         goals_scored: averageGoalsFor,
         goals_conceded: averageGoalsAgainst,
-        corners: null,
-        total_shots: null,
-        shots_on_target: null,
-        yellow_cards: null,
-        red_cards: null,
-        fouls: null,
-        expected_goals: null,
-        possession: null
+
+        corners: calculateWeightedStat(statSamples.corners),
+        total_shots: calculateWeightedStat(statSamples.total_shots),
+        shots_on_target: calculateWeightedStat(statSamples.shots_on_target),
+        yellow_cards: calculateWeightedStat(statSamples.yellow_cards),
+        red_cards: calculateWeightedStat(statSamples.red_cards),
+        fouls: calculateWeightedStat(statSamples.fouls),
+        expected_goals: calculateWeightedStat(statSamples.expected_goals),
+        possession: calculateWeightedStat(statSamples.possession)
       };
 
       res.json({
@@ -1669,6 +1779,8 @@ app.get(
           name: teamName
         },
         matches_analyzed: analyzed,
+        stats_matches_analyzed: statsMatchesAnalyzed,
+        stats_matches_failed: statsMatchesFailed,
         averages,
         results: [
           {
@@ -1682,7 +1794,7 @@ app.get(
           losses
         },
         message: analyzed
-          ? "Medie calcolate sulle partite disponibili in Supabase."
+          ? "Medie calcolate sulle ultime partite disponibili."
           : "Nessuna partita storica disponibile per questa squadra."
       });
     } catch (error) {
