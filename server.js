@@ -309,10 +309,24 @@ function normalizeFixture(match, seasonOverride) {
     match.match_date ||
     null;
 
+    const matchYear = date
+    ? Number(String(date).slice(0, 4))
+    : null;
+
+  const matchMonth = date
+    ? Number(String(date).slice(5, 7))
+    : null;
+
+  const inferredSeason = matchYear && matchMonth
+    ? matchMonth >= 7
+      ? `${matchYear}/${matchYear + 1}`
+      : `${matchYear - 1}/${matchYear}`
+    : null;
+
   const season =
     seasonOverride ||
     match.season ||
-    (date ? String(date).slice(0, 4) : null);
+    inferredSeason;
 
   return {
     id: String(match.id),
@@ -955,8 +969,9 @@ app.get(
       if (supabase && matches.length) {
         try {
           savedMatches = await saveMatchesToDatabase(
-            matches,
-            date.slice(0, 4)
+  matches,
+  req.query.season || null
+);
           );
         } catch (error) {
           saveError = error.message;
