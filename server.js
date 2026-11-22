@@ -972,7 +972,6 @@ app.get(
   matches,
   req.query.season || null
 );
-          );
         } catch (error) {
           saveError = error.message;
           console.error(
