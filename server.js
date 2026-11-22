@@ -300,7 +300,9 @@ function normalizeFixture(match, seasonOverride) {
     match.league?.id ??
     match.competition?.id;
 
+  // PitchAPI utilizza time_utc
   const date =
+    match.time_utc ||
     match.kickoff_utc ||
     match.datetime ||
     match.date ||
@@ -855,8 +857,8 @@ app.get("/api/status", async (req, res) => {
   });
 });
 
-// ==========================================
-// TEST PITCHAPI
+ // ==========================================
+// STATUS E TEST
 // ==========================================
 
 app.get(
@@ -877,10 +879,6 @@ app.get(
   }
 );
 
-// ==========================================
-// TEST DATABASE
-// ==========================================
-
 app.get(
   "/api/test-database",
   requireDatabase,
@@ -891,9 +889,7 @@ app.get(
         .select("id")
         .limit(1);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       res.json({
         ok: true,
@@ -952,10 +948,31 @@ app.get(
 
       const matches = getMatches(body);
 
+      let savedMatches = 0;
+      let saveError = null;
+
+      // Salvataggio automatico, senza bloccare il caricamento
+      if (supabase && matches.length) {
+        try {
+          savedMatches = await saveMatchesToDatabase(
+            matches,
+            date.slice(0, 4)
+          );
+        } catch (error) {
+          saveError = error.message;
+          console.error(
+            "Salvataggio automatico Supabase:",
+            error.message
+          );
+        }
+      }
+
       res.json({
         ok: true,
         date,
         results: matches.length,
+        saved_matches: savedMatches,
+        save_error: saveError,
         response: matches
       });
     } catch (error) {
@@ -1051,7 +1068,6 @@ app.post(
 
     let received = 0;
     let saved = 0;
-
     const errors = [];
 
     for (let i = 0; i < days; i++) {
@@ -1076,9 +1092,7 @@ app.post(
 
         saved += await saveMatchesToDatabase(
           matches,
-          String(
-            req.query.season || date.slice(0, 4)
-          )
+          String(req.query.season || date.slice(0, 4))
         );
       } catch (error) {
         errors.push({
@@ -1131,7 +1145,7 @@ app.get(
 );
 
 // ==========================================
-// STATISTICHE, EVENTI E DATI AVANZATI
+// STATISTICHE ED EVENTI
 // ==========================================
 
 const fixtureSubroutes = [
@@ -1162,9 +1176,7 @@ for (const route of fixtureSubroutes) {
 
       try {
         const endpoint =
-          route === "statistics"
-            ? "stats"
-            : route;
+          route === "statistics" ? "stats" : route;
 
         const body = await sportGet(
           `/matches/${encodeURIComponent(req.params.id)}/${endpoint}`
@@ -1182,7 +1194,7 @@ for (const route of fixtureSubroutes) {
 }
 
 // ==========================================
-// SQUADRA
+// SQUADRE
 // ==========================================
 
 app.get(
@@ -1210,10 +1222,6 @@ app.get(
     }
   }
 );
-
-// ==========================================
-// GIOCATORI SQUADRA
-// ==========================================
 
 app.get(
   "/api/team/:id/players",
@@ -1271,7 +1279,7 @@ app.get(
   }
 );
 
-// ==========================================
+ // ==========================================
 // PARTITE DEL CAMPIONATO IN SUPABASE
 // ==========================================
 
@@ -1328,9 +1336,7 @@ app.get(
         .eq("id", matchId)
         .maybeSingle();
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       if (!fixture) {
         return res.status(404).json({
@@ -1418,9 +1424,7 @@ app.get(
         .order("match_date", { ascending: true })
         .limit(limit);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       const history = data || [];
       const results = [];
@@ -1439,10 +1443,7 @@ app.get(
           history
         );
 
-        if (
-          !prediction ||
-          !prediction.probabilities
-        ) {
+        if (!prediction?.probabilities) {
           continue;
         }
 
@@ -1509,7 +1510,7 @@ app.get(
 );
 
 // ==========================================
-// MEDIE E STATISTICHE SQUADRA - CORRETTE
+// MEDIE E STATISTICHE SQUADRA
 // ==========================================
 
 app.get(
@@ -1535,7 +1536,6 @@ app.get(
         30
       );
 
-      // Recupera i dati della squadra da PitchAPI
       const response = await sportGet(
         `/teams/${encodeURIComponent(teamId)}`
       );
@@ -1558,7 +1558,6 @@ app.get(
         });
       }
 
-      // Recupera le partite storiche da Supabase
       const { data, error } = await supabase
         .from("matches")
         .select("*")
@@ -1567,15 +1566,12 @@ app.get(
         .order("match_date", { ascending: false })
         .limit(5000);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       const normalizedTeamName = String(teamName)
         .trim()
         .toLowerCase();
 
-      // Filtra le partite della squadra
       const matches = (data || [])
         .filter(match => {
           const home = String(match.home_team || "")
@@ -1616,10 +1612,7 @@ app.get(
           isHome ? match.away_goals : match.home_goals
         );
 
-        if (
-          scored === null ||
-          conceded === null
-        ) {
+        if (scored === null || conceded === null) {
           continue;
         }
 
@@ -1627,13 +1620,9 @@ app.get(
         goalsAgainst += conceded;
         analyzed++;
 
-        if (scored > conceded) {
-          wins++;
-        } else if (scored === conceded) {
-          draws++;
-        } else {
-          losses++;
-        }
+        if (scored > conceded) wins++;
+        else if (scored === conceded) draws++;
+        else losses++;
       }
 
       const averageGoalsFor = analyzed
@@ -1647,10 +1636,8 @@ app.get(
       const averages = {
         goals_for: averageGoalsFor,
         goals_against: averageGoalsAgainst,
-
         goals_scored: averageGoalsFor,
         goals_conceded: averageGoalsAgainst,
-
         corners: null,
         total_shots: null,
         shots_on_target: null,
@@ -1663,29 +1650,23 @@ app.get(
 
       res.json({
         ok: true,
-
         team: {
           id: teamId,
           name: teamName
         },
-
         matches_analyzed: analyzed,
-
         averages,
-
         results: [
           {
             team: teamName,
             averages
           }
         ],
-
         results_summary: {
           wins,
           draws,
           losses
         },
-
         message: analyzed
           ? "Medie calcolate sulle partite disponibili in Supabase."
           : "Nessuna partita storica disponibile per questa squadra."
@@ -1697,7 +1678,7 @@ app.get(
 );
 
 // ==========================================
-// GIOCATORI E ROSA SQUADRA
+// GIOCATORI
 // ==========================================
 
 app.get(
@@ -1722,7 +1703,7 @@ app.get(
         ok: true,
         team_id: teamId,
         data: response,
-        note: "Dati restituiti dal provider. Le medie individuali richiedono statistiche giocatore verificate."
+        note: "Le medie individuali richiedono statistiche giocatore verificate."
       });
     } catch (error) {
       handleError(res, error);
@@ -1768,17 +1749,13 @@ app.get(
         .lt("match_date", `${date}T23:59:59.999`)
         .order("match_date", { ascending: true });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       const selected = [];
       const historyCache = {};
 
       for (const match of fixtures || []) {
-        if (selected.length >= maxMatches) {
-          break;
-        }
+        if (selected.length >= maxMatches) break;
 
         const leagueId = String(match.league_id);
         const season = String(match.season);
@@ -1796,9 +1773,7 @@ app.get(
               .order("match_date", { ascending: false })
               .limit(500);
 
-          if (historyError) {
-            throw historyError;
-          }
+          if (historyError) throw historyError;
 
           historyCache[cacheKey] = data || [];
         }
@@ -1808,24 +1783,18 @@ app.get(
           historyCache[cacheKey]
         );
 
-        if (!prediction?.probabilities) {
-          continue;
-        }
+        if (!prediction?.probabilities) continue;
 
-        const markets = prediction.probabilities;
-
-        const candidates = Object.entries(markets)
+        const candidates = Object.entries(
+          prediction.probabilities
+        )
           .filter(([market, probability]) =>
             Number.isFinite(Number(probability)) &&
             Number(probability) >= minProbability
           )
-          .sort((a, b) =>
-            Number(b[1]) - Number(a[1])
-          );
+          .sort((a, b) => Number(b[1]) - Number(a[1]));
 
-        if (!candidates.length) {
-          continue;
-        }
+        if (!candidates.length) continue;
 
         const [market, probability] = candidates[0];
 
@@ -1853,13 +1822,10 @@ app.get(
         max_matches: maxMatches,
         minimum_probability: minProbability,
         selected_matches: selected.length,
-
         estimated_combined_probability: Number(
           combinedProbability.toFixed(4)
         ),
-
         selections: selected,
-
         warning:
           "Le probabilità sono stime del modello, non garanzie. Le selezioni non sono necessariamente indipendenti."
       });
