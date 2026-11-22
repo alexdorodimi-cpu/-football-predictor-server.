@@ -1042,9 +1042,15 @@ app.get(
     }
 
     try {
-      const body = await sportGet(
-        `/date/${encodeURIComponent(date)}`
-      );
+      const status = ["played", "upcoming", "all"].includes(
+  String(req.query.status || "all")
+)
+  ? String(req.query.status || "all")
+  : "all";
+
+const body = await sportGet(
+  `/date/${encodeURIComponent(date)}?status=${encodeURIComponent(status)}`
+);
 
       const matches = getMatches(body);
 
