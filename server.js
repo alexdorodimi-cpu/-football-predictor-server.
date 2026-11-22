@@ -1,3 +1,4 @@
+
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
@@ -8,8 +9,8 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "20kb" }));
 
 const PORT = process.env.PORT || 10000;
-const SPORTAPI_URL = "https://api.pitchapi.dev/v1";
-const SPORTAPI_KEY = String(process.env.PITCHAPI_KEY || "").trim();
+const PITCHAPI_URL = "https://api.pitchapi.dev/v1";
+const PITCHAPI_KEY = String(process.env.PITCHAPI_KEY || "").trim();
 const ACCESS_TOKEN = String(process.env.PREDICTOR_ACCESS_TOKEN || "").trim();
 
 app.use("/api/", rateLimit({
@@ -50,10 +51,10 @@ function requireAccess(req, res, next) {
 }
 
 function requireSportApi(req, res, next) {
-  if (!SPORTAPI_KEY) {
+  if (!PITCHAPI_KEY) {
     return res.status(503).json({
       ok: false,
-      error: "SPORTAPI_KEY non configurata su Render."
+      error: "PITCHAPI_KEY non configurata su Render."
     });
   }
   next();
@@ -70,19 +71,20 @@ function requireDatabase(req, res, next) {
 }
 
 app.use("/api", (req, res, next) => {
-  // Lo stato resta pubblico e non espone segreti; tutte le altre API sono protette.
   if (req.path === "/status") return next();
   return requireAccess(req, res, next);
 });
 
-// SPORTAPI: tutte le risposte sono JSON. La chiave resta sul server.
+// PITCHAPI
 async function sportGet(path) {
-  if (!SPORTAPI_KEY) throw new Error("SPORTAPI_KEY non configurata.");
+  if (!PITCHAPI_KEY) {
+    throw new Error("PITCHAPI_KEY non configurata.");
+  }
 
-  const response = await fetch(`${SPORTAPI_URL}${path}`, {
+  const response = await fetch(`${PITCHAPI_URL}${path}`, {
     method: "GET",
     headers: {
-      "X-Api-Key": SPORTAPI_KEY,
+      "X-API-KEY": PITCHAPI_KEY,
       "Accept": "application/json"
     },
     signal: AbortSignal.timeout(20000)
@@ -90,25 +92,32 @@ async function sportGet(path) {
 
   const raw = await response.text();
   let body;
+
   try {
     body = raw ? JSON.parse(raw) : {};
   } catch {
-    throw new Error("SportAPI ha restituito una risposta non JSON.");
+    throw new Error("PitchAPI ha restituito una risposta non JSON.");
   }
 
   if (!response.ok) {
     const error = new Error(
-      body.error || body.message || `SportAPI HTTP ${response.status}`
+      body?.error?.message ||
+      body?.error ||
+      body?.message ||
+      `PitchAPI HTTP ${response.status}`
     );
+
     error.status = response.status;
     error.details = body;
     throw error;
   }
+
   return body;
 }
 
 function handleError(res, error) {
   console.error("Errore server:", error.message);
+
   return res.status(error.status || 500).json({
     ok: false,
     error: error.message,
@@ -116,8 +125,12 @@ function handleError(res, error) {
   });
 }
 
+// FUNZIONI GENERALI
 function getNumber(value) {
-  const n = Number.parseFloat(String(value ?? "").replace(",", "."));
+  const n = Number.parseFloat(
+    String(value ?? "").replace(",", ".")
+  );
+
   return Number.isFinite(n) ? n : null;
 }
 
@@ -126,7 +139,23 @@ function validDate(value) {
 }
 
 function validNumericId(value) {
-  return /^\d+$/.test(String(value || ""));
+  return /^[A-Za-z]_[A-Za-z0-9]+$/.test(String(value || ""));
+}
+
+function getMatches(body) {
+  if (Array.isArray(body?.data?.matches)) {
+    return body.data.matches;
+  }
+
+  if (Array.isArray(body?.data)) {
+    return body.data;
+  }
+
+  if (Array.isArray(body?.matches)) {
+    return body.matches;
+  }
+
+  return [];
 }
 
 function getHomeName(match) {
@@ -150,22 +179,40 @@ function getAwayId(match) {
 }
 
 function getHomeScore(match) {
-  return getNumber(match.home_score ?? match.score_home ?? match.score?.home);
+  return getNumber(
+    match.home_score ??
+    match.score_home ??
+    match.score?.home
+  );
 }
 
 function getAwayScore(match) {
-  return getNumber(match.away_score ?? match.score_away ?? match.score?.away);
+  return getNumber(
+    match.away_score ??
+    match.score_away ??
+    match.score?.away
+  );
 }
 
 function isFinished(match) {
   const status = String(match.status || "").toUpperCase();
-  return ["FT", "AET", "PENS", "FINISHED", "COMPLETED"].includes(status) ||
+
+  return [
+    "FT",
+    "AET",
+    "PENS",
+    "FINISHED",
+    "COMPLETED"
+  ].includes(status) ||
     (getHomeScore(match) !== null && getAwayScore(match) !== null);
 }
 
+// NORMALIZZAZIONE PARTITE
 function normalizeFixture(match, seasonOverride) {
   const leagueId = match.league_id ?? match.league?.id;
-  const season = seasonOverride || match.season ||
+
+  const season = seasonOverride ||
+    match.season ||
     String((match.date || match.datetime || "").slice(0, 4));
 
   return {
@@ -175,64 +222,102 @@ function normalizeFixture(match, seasonOverride) {
     season: String(season),
     home_team: getHomeName(match) || "Squadra casa",
     away_team: getAwayName(match) || "Squadra ospite",
-    match_date: match.kickoff_utc || match.datetime || match.date || null,
+    match_date:
+      match.kickoff_utc ||
+      match.datetime ||
+      match.date ||
+      null,
     home_goals: getHomeScore(match),
     away_goals: getAwayScore(match),
     status: match.status || null
   };
 }
 
-// SALVATAGGIO PARTITE. La chiave primaria è l'ID SportAPI.
+// SALVATAGGIO SUPABASE
 async function saveMatchesToDatabase(matches, seasonOverride) {
-  if (!supabase) throw new Error("Supabase non configurato.");
-  if (!Array.isArray(matches) || matches.length === 0) return 0;
+  if (!supabase) {
+    throw new Error("Supabase non configurato.");
+  }
+
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return 0;
+  }
 
   const rows = matches
-    .filter(m => m && m.id !== undefined && getHomeName(m) && getAwayName(m))
+    .filter(m =>
+      m &&
+      m.id !== undefined &&
+      getHomeName(m) &&
+      getAwayName(m)
+    )
     .map(m => normalizeFixture(m, seasonOverride));
 
   if (!rows.length) return 0;
 
-  const { error } = await supabase.from("matches").upsert(rows, {
-    onConflict: "id"
-  });
+  const { error } = await supabase
+    .from("matches")
+    .upsert(rows, { onConflict: "id" });
+
   if (error) throw error;
+
   return rows.length;
 }
 
 async function getLeagueMatchesFromDatabase(leagueId, season) {
-  if (!supabase) throw new Error("Supabase non configurato.");
+  if (!supabase) {
+    throw new Error("Supabase non configurato.");
+  }
+
   let query = supabase
     .from("matches")
     .select("*")
     .eq("league_id", String(leagueId))
     .order("match_date", { ascending: true });
 
-  if (season) query = query.eq("season", String(season));
+  if (season) {
+    query = query.eq("season", String(season));
+  }
+
   const { data, error } = await query.limit(5000);
+
   if (error) throw error;
+
   return data || [];
 }
 
 // MODELLO POISSON
 function weightedAverage(sample, key) {
   if (!sample.length) return 0;
+
   let weightedSum = 0;
   let totalWeight = 0;
 
   sample.forEach((item, index) => {
     const weight = Math.pow(0.75, index);
+
     weightedSum += item[key] * weight;
     totalWeight += weight;
   });
+
   return totalWeight ? weightedSum / totalWeight : 0;
 }
 
 function poissonProbability(lambda, goals) {
-  if (lambda <= 0) return goals === 0 ? 1 : 0;
+  if (lambda <= 0) {
+    return goals === 0 ? 1 : 0;
+  }
+
   let factorial = 1;
-  for (let i = 2; i <= goals; i++) factorial *= i;
-  return Math.exp(-lambda) * Math.pow(lambda, goals) / factorial;
+
+  for (let i = 2; i <= goals; i++) {
+    factorial *= i;
+  }
+
+  return (
+    Math.exp(-lambda) *
+    Math.pow(lambda, goals) /
+    factorial
+  );
 }
 
 function buildGoalModel(homeLambda, awayLambda) {
@@ -245,12 +330,21 @@ function buildGoalModel(homeLambda, awayLambda) {
       const probability =
         poissonProbability(homeLambda, home) *
         poissonProbability(awayLambda, away);
-      matrix.push({ home, away, probability });
+
+      matrix.push({
+        home,
+        away,
+        probability
+      });
+
       total += probability;
     }
   }
 
-  for (const item of matrix) item.probability /= total;
+  for (const item of matrix) {
+    item.probability /= total;
+  }
+
   return matrix;
 }
 
@@ -260,77 +354,133 @@ function percent(value) {
 
 function getReliability(probability, sampleSize) {
   let score = probability;
-  if (sampleSize < 10) score -= (10 - sampleSize) * 2;
+
+  if (sampleSize < 10) {
+    score -= (10 - sampleSize) * 2;
+  }
+
   score = Math.max(0, Math.min(100, score));
 
   return {
     score: Number(score.toFixed(1)),
-    level: score >= 75 ? "ALTA" : score >= 60 ? "MEDIA" : "BASSA"
+    level:
+      score >= 75 ? "ALTA" :
+      score >= 60 ? "MEDIA" :
+      "BASSA"
   };
 }
 
+// CAMPIONI STORICI
 function sampleForTeam(matches, teamId, beforeDate) {
   return matches
     .filter(match =>
       match.match_date &&
       new Date(match.match_date) < new Date(beforeDate) &&
-      (String(match.home_team_id || match.home_id || "") === String(teamId) ||
-       String(match.away_team_id || match.away_id || "") === String(teamId)) &&
-      match.home_goals !== null && match.home_goals !== undefined &&
-      match.away_goals !== null && match.away_goals !== undefined
+      (
+        String(match.home_team_id || match.home_id || "") === String(teamId) ||
+        String(match.away_team_id || match.away_id || "") === String(teamId)
+      ) &&
+      match.home_goals !== null &&
+      match.home_goals !== undefined &&
+      match.away_goals !== null &&
+      match.away_goals !== undefined
     )
-    .sort((a, b) => new Date(b.match_date) - new Date(a.match_date))
+    .sort((a, b) =>
+      new Date(b.match_date) - new Date(a.match_date)
+    )
     .slice(0, 10)
     .map(match => {
-      const home = String(match.home_team_id || match.home_id || "") === String(teamId);
+      const home =
+        String(match.home_team_id || match.home_id || "") === String(teamId);
+
       return {
-        scored: Number(home ? match.home_goals : match.away_goals),
-        conceded: Number(home ? match.away_goals : match.home_goals)
+        scored: Number(
+          home ? match.home_goals : match.away_goals
+        ),
+        conceded: Number(
+          home ? match.away_goals : match.home_goals
+        )
       };
     });
 }
 
-// I record storici importati dalla API non hanno sempre gli ID squadra separati.
-// Questa funzione ricava i campioni confrontando i nomi delle squadre.
 function sampleForTeamByName(matches, teamName, beforeDate) {
-  const target = String(teamName || "").trim().toLowerCase();
+  const target = String(teamName || "")
+    .trim()
+    .toLowerCase();
 
   return matches
     .filter(match => {
       const date = match.match_date || match.date;
-      const home = String(match.home_team || "").trim().toLowerCase();
-      const away = String(match.away_team || "").trim().toLowerCase();
-      return date && new Date(date) < new Date(beforeDate) &&
+
+      const home = String(match.home_team || "")
+        .trim()
+        .toLowerCase();
+
+      const away = String(match.away_team || "")
+        .trim()
+        .toLowerCase();
+
+      return (
+        date &&
+        new Date(date) < new Date(beforeDate) &&
         (home === target || away === target) &&
-        match.home_goals !== null && match.home_goals !== undefined &&
-        match.away_goals !== null && match.away_goals !== undefined;
+        match.home_goals !== null &&
+        match.home_goals !== undefined &&
+        match.away_goals !== null &&
+        match.away_goals !== undefined
+      );
     })
     .sort((a, b) =>
-      new Date(b.match_date || b.date) - new Date(a.match_date || a.date)
+      new Date(b.match_date || b.date) -
+      new Date(a.match_date || a.date)
     )
     .slice(0, 10)
     .map(match => {
-      const home = String(match.home_team).trim().toLowerCase() === target;
+      const home =
+        String(match.home_team).trim().toLowerCase() === target;
+
       return {
-        scored: Number(home ? match.home_goals : match.away_goals),
-        conceded: Number(home ? match.away_goals : match.home_goals)
+        scored: Number(
+          home ? match.home_goals : match.away_goals
+        ),
+        conceded: Number(
+          home ? match.away_goals : match.home_goals
+        )
       };
     });
 }
 
+// CALCOLO PRONOSTICO
 function calculatePrediction(fixture, history) {
   const homeName = fixture.home_team || getHomeName(fixture);
   const awayName = fixture.away_team || getAwayName(fixture);
-  const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
 
-  const homeSample = sampleForTeamByName(history, homeName, fixtureDate);
-  const awaySample = sampleForTeamByName(history, awayName, fixtureDate);
+  const fixtureDate =
+    fixture.match_date ||
+    fixture.date ||
+    fixture.datetime;
+
+  const homeSample = sampleForTeamByName(
+    history,
+    homeName,
+    fixtureDate
+  );
+
+  const awaySample = sampleForTeamByName(
+    history,
+    awayName,
+    fixtureDate
+  );
 
   if (homeSample.length < 5 || awaySample.length < 5) {
     return {
       ok: false,
       error: "Dati insufficienti: servono almeno 5 risultati precedenti per entrambe le squadre.",
-      samples: { home: homeSample.length, away: awaySample.length }
+      samples: {
+        home: homeSample.length,
+        away: awaySample.length
+      }
     };
   }
 
@@ -339,38 +489,68 @@ function calculatePrediction(fixture, history) {
   const awayFor = weightedAverage(awaySample, "scored");
   const awayAgainst = weightedAverage(awaySample, "conceded");
 
-  const homeLambda = Math.max(0.10, Math.min(5, (homeFor + awayAgainst) / 2));
-  const awayLambda = Math.max(0.10, Math.min(5, (awayFor + homeAgainst) / 2));
+  const homeLambda = Math.max(
+    0.10,
+    Math.min(5, (homeFor + awayAgainst) / 2)
+  );
+
+  const awayLambda = Math.max(
+    0.10,
+    Math.min(5, (awayFor + homeAgainst) / 2)
+  );
+
   const matrix = buildGoalModel(homeLambda, awayLambda);
 
-  const sum = fn => matrix.filter(fn)
-    .reduce((total, item) => total + item.probability, 0);
+  const sum = fn => matrix
+    .filter(fn)
+    .reduce(
+      (total, item) => total + item.probability,
+      0
+    );
 
   const homeWin = sum(x => x.home > x.away);
   const draw = sum(x => x.home === x.away);
   const awayWin = sum(x => x.home < x.away);
-  const over = line => sum(x => x.home + x.away > line);
+
+  const over = line =>
+    sum(x => x.home + x.away > line);
+
   const under = line => 1 - over(line);
-  const bttsYes = sum(x => x.home > 0 && x.away > 0);
-  const sampleSize = Math.min(homeSample.length, awaySample.length);
+
+  const bttsYes = sum(
+    x => x.home > 0 && x.away > 0
+  );
+
+  const sampleSize = Math.min(
+    homeSample.length,
+    awaySample.length
+  );
 
   const probabilities = {
     "1": percent(homeWin),
     "X": percent(draw),
     "2": percent(awayWin),
+
     over_1_5: percent(over(1)),
     under_1_5: percent(under(1)),
+
     over_2_5: percent(over(2)),
     under_2_5: percent(under(2)),
+
     over_3_5: percent(over(3)),
     under_3_5: percent(under(3)),
+
     btts_yes: percent(bttsYes),
     btts_no: percent(1 - bttsYes)
   };
-    const reliability = {};
+
+  const reliability = {};
 
   for (const [market, probability] of Object.entries(probabilities)) {
-    reliability[market] = getReliability(probability, sampleSize);
+    reliability[market] = getReliability(
+      probability,
+      sampleSize
+    );
   }
 
   const exactScores = [...matrix]
@@ -383,38 +563,63 @@ function calculatePrediction(fixture, history) {
 
   return {
     ok: true,
+
     model: "Poisson con medie ponderate delle ultime 10 partite (peso 0,75)",
+
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
       away: Number(awayLambda.toFixed(2))
     },
+
     probabilities,
     reliability,
+
     samples: {
       home: homeSample.length,
       away: awaySample.length
     },
+
     exact_scores: exactScores
   };
 }
 
-// STATUS SERVER
-app.get("/api/status", (req, res) => {
+// STATUS SERVER E CAMPIONATI
+app.get("/api/status", async (req, res) => {
+  let leagues = [];
+  let providerConnected = false;
+
+  if (PITCHAPI_KEY) {
+    try {
+      const body = await sportGet("/leagues");
+
+      leagues = Array.isArray(body?.data?.leagues)
+        ? body.data.leagues
+        : (Array.isArray(body?.data) ? body.data : []);
+
+      providerConnected = true;
+    } catch (error) {
+      console.error("PitchAPI status:", error.message);
+    }
+  }
+
   res.json({
     ok: true,
     server: "Football Predictor AI",
-    provider: "SportAPI",
-    sportapiKeyConfigured: Boolean(SPORTAPI_KEY),
-    sportapiKeyLength: SPORTAPI_KEY.length,
+    provider: "PitchAPI",
+    pitchapiKeyConfigured: Boolean(PITCHAPI_KEY),
+    providerConnected,
+    leagues,
+    leagueCount: leagues.length,
     databaseConfigured: Boolean(supabase),
     accessTokenConfigured: Boolean(ACCESS_TOKEN)
   });
 });
 
-// TEST COLLEGAMENTO SPORTAPI
-app.get("/api/test-sportapi", requireSportApi, async (req, res) => {
+// TEST PITCHAPI
+app.get("/api/test-pitchapi", requireSportApi, async (req, res) => {
   try {
     const body = await sportGet("/leagues");
+
     res.json({
       ok: true,
       connected: true,
@@ -450,7 +655,11 @@ app.get("/api/test-database", requireDatabase, async (req, res) => {
 app.get("/api/leagues", requireSportApi, async (req, res) => {
   try {
     const body = await sportGet("/leagues");
-    res.json({ ok: true, response: body });
+
+    res.json({
+      ok: true,
+      response: body
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -468,8 +677,11 @@ app.get("/api/fixtures", requireSportApi, async (req, res) => {
   }
 
   try {
-    const body = await sportGet(`/fixtures/date/${encodeURIComponent(date)}`);
-    const matches = Array.isArray(body.data) ? body.data : [];
+    const body = await sportGet(
+      `/date/${encodeURIComponent(date)}`
+    );
+
+    const matches = getMatches(body);
 
     res.json({
       ok: true,
@@ -482,91 +694,123 @@ app.get("/api/fixtures", requireSportApi, async (req, res) => {
   }
 });
 
-// SINCRONIZZA UNA DATA IN SUPABASE
-app.post("/api/sync/date/:date", requireSportApi, requireDatabase, async (req, res) => {
-  const date = req.params.date;
+// SINCRONIZZA UNA DATA
+app.post(
+  "/api/sync/date/:date",
+  requireSportApi,
+  requireDatabase,
+  async (req, res) => {
+    const date = req.params.date;
 
-  if (!validDate(date)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Data non valida: usa YYYY-MM-DD."
-    });
-  }
-
-  try {
-    const body = await sportGet(`/fixtures/date/${encodeURIComponent(date)}`);
-    const matches = Array.isArray(body.data) ? body.data : [];
-    const season = String(req.query.season || date.slice(0, 4));
-    const saved = await saveMatchesToDatabase(matches, season);
-
-    res.json({
-      ok: true,
-      date,
-      received_matches: matches.length,
-      saved_matches: saved,
-      season
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
-// SINCRONIZZA UN INTERVALLO MASSIMO DI 14 GIORNI
-app.post("/api/sync/range", requireSportApi, requireDatabase, async (req, res) => {
-  const from = String(req.query.from || "");
-  const to = String(req.query.to || "");
-
-  if (!validDate(from) || !validDate(to) || new Date(to) < new Date(from)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Usa from=YYYY-MM-DD e to=YYYY-MM-DD."
-    });
-  }
-
-  const start = new Date(`${from}T12:00:00Z`);
-  const end = new Date(`${to}T12:00:00Z`);
-  const days = Math.round((end - start) / 86400000) + 1;
-
-  if (days > 14) {
-    return res.status(400).json({
-      ok: false,
-      error: "Massimo 14 giorni per richiesta."
-    });
-  }
-
-  let received = 0;
-  let saved = 0;
-  const errors = [];
-
-  for (let i = 0; i < days; i++) {
-    const dateObject = new Date(start);
-    dateObject.setUTCDate(dateObject.getUTCDate() + i);
-    const date = dateObject.toISOString().slice(0, 10);
+    if (!validDate(date)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Data non valida: usa YYYY-MM-DD."
+      });
+    }
 
     try {
-      const body = await sportGet(`/fixtures/date/${date}`);
-      const matches = Array.isArray(body.data) ? body.data : [];
-
-      received += matches.length;
-      saved += await saveMatchesToDatabase(
-        matches,
-        String(req.query.season || date.slice(0, 4))
+      const body = await sportGet(
+        `/date/${encodeURIComponent(date)}`
       );
+
+      const matches = getMatches(body);
+      const season = String(req.query.season || date.slice(0, 4));
+
+      const saved = await saveMatchesToDatabase(
+        matches,
+        season
+      );
+
+      res.json({
+        ok: true,
+        date,
+        received_matches: matches.length,
+        saved_matches: saved,
+        season
+      });
     } catch (error) {
-      errors.push({ date, error: error.message });
+      handleError(res, error);
     }
   }
+);
 
-  res.json({
-    ok: errors.length === 0,
-    from,
-    to,
-    days_requested: days,
-    received_matches: received,
-    saved_matches: saved,
-    errors
-  });
-});
+// SINCRONIZZA INTERVALLO MASSIMO 14 GIORNI
+app.post(
+  "/api/sync/range",
+  requireSportApi,
+  requireDatabase,
+  async (req, res) => {
+    const from = String(req.query.from || "");
+    const to = String(req.query.to || "");
+
+    if (
+      !validDate(from) ||
+      !validDate(to) ||
+      new Date(to) < new Date(from)
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "Usa from=YYYY-MM-DD e to=YYYY-MM-DD."
+      });
+    }
+
+    const start = new Date(`${from}T12:00:00Z`);
+    const end = new Date(`${to}T12:00:00Z`);
+
+    const days = Math.round(
+      (end - start) / 86400000
+    ) + 1;
+
+    if (days > 14) {
+      return res.status(400).json({
+        ok: false,
+        error: "Massimo 14 giorni per richiesta."
+      });
+    }
+
+    let received = 0;
+    let saved = 0;
+    const errors = [];
+
+    for (let i = 0; i < days; i++) {
+      const dateObject = new Date(start);
+
+      dateObject.setUTCDate(
+        dateObject.getUTCDate() + i
+      );
+
+      const date = dateObject.toISOString().slice(0, 10);
+
+      try {
+        const body = await sportGet(`/date/${date}`);
+        const matches = getMatches(body);
+
+        received += matches.length;
+
+        saved += await saveMatchesToDatabase(
+          matches,
+          String(req.query.season || date.slice(0, 4))
+        );
+      } catch (error) {
+        errors.push({
+          date,
+          error: error.message
+        });
+      }
+    }
+
+    res.json({
+      ok: errors.length === 0,
+      from,
+      to,
+      days_requested: days,
+      received_matches: received,
+      saved_matches: saved,
+      errors
+    });
+  }
+);
 
 // DETTAGLIO PARTITA
 app.get("/api/fixture/:id", requireSportApi, async (req, res) => {
@@ -578,39 +822,64 @@ app.get("/api/fixture/:id", requireSportApi, async (req, res) => {
   }
 
   try {
-    const body = await sportGet(`/fixtures/${req.params.id}`);
-    res.json({ ok: true, response: body });
+    const body = await sportGet(
+      `/matches/${encodeURIComponent(req.params.id)}`
+    );
+
+    res.json({
+      ok: true,
+      response: body
+    });
   } catch (error) {
     handleError(res, error);
   }
 });
 
-// STATISTICHE, EVENTI E FORMAZIONI
+// STATISTICHE, EVENTI, FORMAZIONI E DATI AVANZATI
 const fixtureSubroutes = [
   "statistics",
+  "stats",
   "events",
-  "lineups"
+  "lineups",
+  "players",
+  "shots",
+  "momentum",
+  "advanced",
+  "h2h",
+  "live",
+  "heatmaps"
 ];
 
 for (const route of fixtureSubroutes) {
-  app.get(`/api/fixture/:id/${route}`, requireSportApi, async (req, res) => {
-    if (!validNumericId(req.params.id)) {
-      return res.status(400).json({
-        ok: false,
-        error: "ID partita non valido."
-      });
-    }
+  app.get(
+    `/api/fixture/:id/${route}`,
+    requireSportApi,
+    async (req, res) => {
+      if (!validNumericId(req.params.id)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID partita non valido."
+        });
+      }
 
-    try {
-      const body = await sportGet(
-        `/fixtures/${req.params.id}/${route}`
-      );
+      try {
+        const endpoint = route === "statistics"
+          ? "stats"
+          : route;
 
-      res.json({ ok: true, response: body });
-    } catch (error) {
-      handleError(res, error);
+        const body = await sportGet(
+          `/matches/${encodeURIComponent(req.params.id)}/${endpoint}`
+        );
+
+        res.json({
+          ok: true,
+          response: body
+        });
+      } catch (error) {
+        handleError(res, error);
+      }
     }
-  });
+  );
 }
 
 // SQUADRA
@@ -623,14 +892,20 @@ app.get("/api/team/:id", requireSportApi, async (req, res) => {
   }
 
   try {
-    const body = await sportGet(`/teams/${req.params.id}`);
-    res.json({ ok: true, response: body });
+    const body = await sportGet(
+      `/teams/${encodeURIComponent(req.params.id)}`
+    );
+
+    res.json({
+      ok: true,
+      response: body
+    });
   } catch (error) {
     handleError(res, error);
   }
 });
 
-// ROSA SQUADRA
+// GIOCATORI SQUADRA
 app.get("/api/team/:id/players", requireSportApi, async (req, res) => {
   if (!validNumericId(req.params.id)) {
     return res.status(400).json({
@@ -640,8 +915,14 @@ app.get("/api/team/:id/players", requireSportApi, async (req, res) => {
   }
 
   try {
-    const body = await sportGet(`/teams/${req.params.id}/squad`);
-    res.json({ ok: true, response: body });
+    const body = await sportGet(
+      `/teams/${encodeURIComponent(req.params.id)}/players`
+    );
+
+    res.json({
+      ok: true,
+      response: body
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -657,17 +938,25 @@ app.get("/api/standings/:leagueId", requireSportApi, async (req, res) => {
   }
 
   try {
-    const body = await sportGet(`/standings/${req.params.leagueId}`);
-    res.json({ ok: true, response: body });
+    const body = await sportGet(
+      `/standings/${encodeURIComponent(req.params.leagueId)}`
+    );
+
+    res.json({
+      ok: true,
+      response: body
+    });
   } catch (error) {
     handleError(res, error);
   }
 });
 
-// PARTITE DEL CAMPIONATO SALVATE NEL DATABASE
+// PARTITE DEL CAMPIONATO IN SUPABASE
 app.get("/api/league/:id/matches", requireDatabase, async (req, res) => {
   const leagueId = req.params.id;
-  const season = req.query.season ? String(req.query.season) : null;
+  const season = req.query.season
+    ? String(req.query.season)
+    : null;
 
   if (!validNumericId(leagueId)) {
     return res.status(400).json({
@@ -677,7 +966,10 @@ app.get("/api/league/:id/matches", requireDatabase, async (req, res) => {
   }
 
   try {
-    const matches = await getLeagueMatchesFromDatabase(leagueId, season);
+    const matches = await getLeagueMatchesFromDatabase(
+      leagueId,
+      season
+    );
 
     res.json({
       ok: true,
@@ -716,7 +1008,10 @@ app.get("/api/fixture/:id/predictions", requireDatabase, async (req, res) => {
       fixture.season
     );
 
-    const prediction = calculatePrediction(fixture, history);
+    const prediction = calculatePrediction(
+      fixture,
+      history
+    );
 
     if (!prediction.ok) {
       return res.status(422).json({
@@ -729,6 +1024,7 @@ app.get("/api/fixture/:id/predictions", requireDatabase, async (req, res) => {
     res.json({
       ok: true,
       model: prediction.model,
+
       match: {
         id: fixture.id,
         league: fixture.league_name,
@@ -738,24 +1034,25 @@ app.get("/api/fixture/:id/predictions", requireDatabase, async (req, res) => {
         date: fixture.match_date,
         status: fixture.status
       },
+
       samples: prediction.samples,
       expected_goals: prediction.expected_goals,
       probabilities: prediction.probabilities,
       reliability: prediction.reliability,
       exact_scores: prediction.exact_scores,
+
       disclaimer: "Pronostico statistico, non garanzia del risultato."
     });
   } catch (error) {
     handleError(res, error);
   }
 });
-// ==========================================
-// BACKTEST DEL MODELLO
-// ==========================================
 
+// BACKTEST MODELLO
 app.get("/api/backtest/:leagueId", requireDatabase, async (req, res) => {
   try {
     const leagueId = String(req.params.leagueId);
+
     const limit = Math.min(
       Math.max(Number(req.query.limit) || 100, 1),
       300
@@ -780,17 +1077,21 @@ app.get("/api/backtest/:leagueId", requireDatabase, async (req, res) => {
         match.home_goals === null ||
         match.away_goals === null ||
         !match.match_date
-      ) continue;
+      ) {
+        continue;
+      }
 
       const prediction = calculatePrediction(
         match,
-        history,
-        match.match_date
+        history
       );
 
-      if (!prediction || !prediction.probabilities) continue;
+      if (!prediction || !prediction.probabilities) {
+        continue;
+      }
 
       const p = prediction.probabilities;
+
       const actual = {
         home: Number(match.home_goals),
         away: Number(match.away_goals)
@@ -798,31 +1099,37 @@ app.get("/api/backtest/:leagueId", requireDatabase, async (req, res) => {
 
       const actualResult =
         actual.home > actual.away ? "1" :
-        actual.home < actual.away ? "2" : "X";
+        actual.home < actual.away ? "2" :
+        "X";
+
+      const predictedResult = ["1", "X", "2"].sort(
+        (a, b) => p[b] - p[a]
+      )[0];
 
       results.push({
         match_id: match.id,
         home_team: match.home_team,
         away_team: match.away_team,
         actual_result: actualResult,
-        predicted_result: ["1", "X", "2"].sort(
-          (a, b) => p[b] - p[a]
-        )[0],
-        correct_1x2:
-          ["1", "X", "2"].sort((a, b) => p[b] - p[a])[0] === actualResult,
+        predicted_result: predictedResult,
+        correct_1x2: predictedResult === actualResult,
         actual_goals: actual.home + actual.away,
         probabilities: p
       });
     }
 
     const evaluated = results.length;
-    const correct = results.filter(r => r.correct_1x2).length;
+
+    const correct = results.filter(
+      r => r.correct_1x2
+    ).length;
 
     res.json({
       ok: true,
       league_id: leagueId,
       requested_matches: limit,
       evaluated_matches: evaluated,
+
       accuracy_by_market: {
         "1X2": {
           evaluated,
@@ -832,6 +1139,7 @@ app.get("/api/backtest/:leagueId", requireDatabase, async (req, res) => {
             : 0
         }
       },
+
       results
     });
   } catch (error) {
@@ -839,119 +1147,139 @@ app.get("/api/backtest/:leagueId", requireDatabase, async (req, res) => {
   }
 });
 
-
-// ==========================================
 // MEDIE E STATISTICHE SQUADRA
-// ==========================================
+app.get(
+  "/api/team/:id/averages",
+  requireSportApi,
+  requireDatabase,
+  async (req, res) => {
+    try {
+      const teamId = String(req.params.id);
 
-app.get("/api/team/:id/averages", requireDatabase, async (req, res) => {
-  try {
-    const teamId = String(req.params.id);
-    const limit = Math.min(
-      Math.max(Number(req.query.limit) || 10, 1),
-      30
-    );
+      const limit = Math.min(
+        Math.max(Number(req.query.last || req.query.limit) || 10, 1),
+        30
+      );
 
-    const response = await sportGet(`/teams/${teamId}`);
-    const teamData = response?.response?.[0] || response?.data || response;
-    const teamName =
-      teamData?.team?.name ||
-      teamData?.name ||
-      teamData?.team_name;
+      const response = await sportGet(
+        `/teams/${encodeURIComponent(teamId)}`
+      );
 
-    if (!teamName) {
-      return res.status(404).json({
-        ok: false,
-        error: "Squadra non trovata nella risposta del provider."
-      });
-    }
+      const teamData =
+        response?.response?.[0] ||
+        response?.data ||
+        response;
 
-    const { data, error } = await supabase
-      .from("matches")
-      .select("*")
-      .or(`home_team.eq.${teamName},away_team.eq.${teamName}`)
-      .not("home_goals", "is", null)
-      .not("away_goals", "is", null)
-      .order("match_date", { ascending: false })
-      .limit(limit);
+      const teamName =
+        teamData?.team?.name ||
+        teamData?.name ||
+        teamData?.team_name;
 
-    if (error) throw error;
+      if (!teamName) {
+        return res.status(404).json({
+          ok: false,
+          error: "Squadra non trovata nella risposta del provider."
+        });
+      }
 
-    const matches = data || [];
+      const { data, error } = await supabase
+        .from("matches")
+        .select("*")
+        .or(`home_team.eq.${teamName},away_team.eq.${teamName}`)
+        .not("home_goals", "is", null)
+        .not("away_goals", "is", null)
+        .order("match_date", { ascending: false })
+        .limit(limit);
 
-    if (!matches.length) {
-      return res.json({
+      if (error) throw error;
+
+      const matches = data || [];
+
+      if (!matches.length) {
+        return res.json({
+          ok: true,
+          team: teamName,
+          matches_analyzed: 0,
+          message: "Nessuna partita storica disponibile."
+        });
+      }
+
+      let goalsFor = 0;
+      let goalsAgainst = 0;
+      let wins = 0;
+      let draws = 0;
+      let losses = 0;
+
+      for (const match of matches) {
+        const isHome = match.home_team === teamName;
+
+        const scored = Number(
+          isHome ? match.home_goals : match.away_goals
+        );
+
+        const conceded = Number(
+          isHome ? match.away_goals : match.home_goals
+        );
+
+        goalsFor += scored;
+        goalsAgainst += conceded;
+
+        if (scored > conceded) wins++;
+        else if (scored === conceded) draws++;
+        else losses++;
+      }
+
+      res.json({
         ok: true,
         team: teamName,
-        matches_analyzed: 0,
-        message: "Nessuna partita storica disponibile."
+        matches_analyzed: matches.length,
+
+        averages: {
+          goals_scored: Number(
+            (goalsFor / matches.length).toFixed(2)
+          ),
+          goals_conceded: Number(
+            (goalsAgainst / matches.length).toFixed(2)
+          )
+        },
+
+        results: {
+          wins,
+          draws,
+          losses
+        }
       });
+    } catch (error) {
+      handleError(res, error);
     }
+  }
+);
 
-    let goalsFor = 0;
-    let goalsAgainst = 0;
-    let wins = 0;
-    let draws = 0;
-    let losses = 0;
+// GIOCATORI E ROSA SQUADRA
+app.get(
+  "/api/team/:id/player-averages",
+  requireSportApi,
+  async (req, res) => {
+    try {
+      const teamId = String(req.params.id);
 
-    for (const match of matches) {
-      const isHome = match.home_team === teamName;
-      const scored = Number(
-        isHome ? match.home_goals : match.away_goals
+      const response = await sportGet(
+        `/teams/${encodeURIComponent(teamId)}/players`
       );
-      const conceded = Number(
-        isHome ? match.away_goals : match.home_goals
-      );
 
-      goalsFor += scored;
-      goalsAgainst += conceded;
-
-      if (scored > conceded) wins++;
-      else if (scored === conceded) draws++;
-      else losses++;
+      res.json({
+        ok: true,
+        team_id: teamId,
+        data: response,
+        note: "Dati restituiti dal provider. Le medie individuali richiedono statistiche giocatore verificate."
+      });
+    } catch (error) {
+      handleError(res, error);
     }
-
-    res.json({
-      ok: true,
-      team: teamName,
-      matches_analyzed: matches.length,
-      averages: {
-        goals_scored: Number((goalsFor / matches.length).toFixed(2)),
-        goals_conceded: Number((goalsAgainst / matches.length).toFixed(2))
-      },
-      results: { wins, draws, losses }
-    });
-  } catch (error) {
-    handleError(res, error);
   }
-});
+);
 
-
-// ==========================================
-// ROSA E GIOCATORI DELLA SQUADRA
-// ==========================================
-
-app.get("/api/team/:id/player-averages", async (req, res) => {
-  try {
-    const teamId = String(req.params.id);
-    const response = await sportGet(`/teams/${teamId}/players`);
-
-    res.json({
-      ok: true,
-      team_id: teamId,
-      data: response,
-      note: "Dati restituiti dal provider. Le medie individuali richiedono statistiche giocatore verificate."
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
-
-// ==========================================
 // GENERATORE MULTIPLE
-// ==========================================
-
 app.get("/api/multiples", requireDatabase, async (req, res) => {
   try {
     const date = String(req.query.date || "").trim();
@@ -1004,18 +1332,19 @@ app.get("/api/multiples", requireDatabase, async (req, res) => {
           .limit(500);
 
         if (historyError) throw historyError;
+
         historyCache[cacheKey] = data || [];
       }
 
       const prediction = calculatePrediction(
         match,
-        historyCache[cacheKey],
-        match.match_date
+        historyCache[cacheKey]
       );
 
       if (!prediction?.probabilities) continue;
 
       const markets = prediction.probabilities;
+
       const candidates = Object.entries(markets)
         .filter(([market, probability]) =>
           Number.isFinite(Number(probability)) &&
@@ -1050,10 +1379,13 @@ app.get("/api/multiples", requireDatabase, async (req, res) => {
       max_matches: maxMatches,
       minimum_probability: minProbability,
       selected_matches: selected.length,
+
       estimated_combined_probability: Number(
         combinedProbability.toFixed(4)
       ),
+
       selections: selected,
+
       warning: "Le probabilità sono stime del modello, non garanzie. Le selezioni non sono necessariamente indipendenti."
     });
   } catch (error) {
@@ -1061,11 +1393,7 @@ app.get("/api/multiples", requireDatabase, async (req, res) => {
   }
 });
 
-
-// ==========================================
 // QUOTE
-// ==========================================
-
 app.get("/api/fixture/:id/odds", (req, res) => {
   res.status(501).json({
     ok: false,
@@ -1074,33 +1402,17 @@ app.get("/api/fixture/:id/odds", (req, res) => {
   });
 });
 
-
-// ==========================================
 // PAGINA PRINCIPALE
-// ==========================================
-
 app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    server: "Football Predictor AI",
-    version: "2.0.0",
-    provider: "SportAPI",
-    message: "Football Predictor API attiva."
-  });
+  res.sendFile(
+    require("path").join(__dirname, "public", "index.html")
+  );
 });
 
-
-// ==========================================
 // FILE STATICI
-// ==========================================
-
 app.use(express.static("public"));
 
-
-// ==========================================
 // ROTTA NON TROVATA
-// ==========================================
-
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
@@ -1109,11 +1421,7 @@ app.use((req, res) => {
   });
 });
 
-
-// ==========================================
 // GESTIONE ERRORI
-// ==========================================
-
 app.use((error, req, res, next) => {
   console.error("Errore server:", error.message);
 
@@ -1127,14 +1435,10 @@ app.use((error, req, res, next) => {
   });
 });
 
-
-// ==========================================
 // AVVIO SERVER
-// ==========================================
-
 app.listen(PORT, () => {
   console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
-  console.log("SportAPI key configurata:", Boolean(SPORTAPI_KEY));
+  console.log("PitchAPI key configurata:", Boolean(PITCHAPI_KEY));
   console.log("Access token configurato:", Boolean(ACCESS_TOKEN));
   console.log("Supabase configurato:", Boolean(supabase));
 });
