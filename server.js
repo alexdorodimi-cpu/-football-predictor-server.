@@ -1215,7 +1215,50 @@ app.use((err, req, res, next) => {
 
 // FILE DEL SITO WEB
 app.use(express.static("public"));
+app.get("/api/test-sportapi", async (req, res) => {
+  try {
+    const apiKey = process.env.SPORTAPI_KEY;
 
+    if (!apiKey) {
+      return res.status(500).json({
+        ok: false,
+        error: "SPORTAPI_KEY non configurata"
+      });
+    }
+
+    const response = await fetch(
+      "https://sportapi.ai/api/leagues",
+      {
+        headers: {
+          "X-Api-Key": apiKey
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(502).json({
+        ok: false,
+        status: response.status,
+        error: data.message || data.error || "Errore SportAPI"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      connected: true,
+      message: "Collegamento a SportAPI riuscito!"
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      connected: false,
+      error: error.message
+    });
+  }
+});
 // AVVIO SERVER
 app.listen(PORT, () => {
   console.log(`Football Predictor Server attivo sulla porta ${PORT}`);
