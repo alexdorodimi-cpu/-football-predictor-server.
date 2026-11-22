@@ -121,9 +121,45 @@ async function saveMatchesToDatabase(matches) {
     console.error("Errore salvataggio partite:", error.message);
     throw error;
   }
-
-  return rows.length;
+    return rows.length;
 }
+
+  // SALVATAGGIO PRONOSTICI SU SUPABASE
+async function savePredictionToDatabase(matchId, probabilities) {
+  const modelVersion = "poisson_weighted_0.75_v1";
+
+  const { data: existing, error: checkError } = await supabase
+    .from("predictions")
+    .select("id")
+    .eq("match_id", String(matchId))
+    .eq("model_version", modelVersion)
+    .maybeSingle();
+
+  if (checkError) {
+    console.error("Errore controllo pronostico:", checkError.message);
+    throw checkError;
+  }
+
+  if (existing) {
+    return false;
+  }
+
+  const { error } = await supabase
+    .from("predictions")
+    .insert({
+      match_id: String(matchId),
+      model_version: modelVersion,
+      probabilities: probabilities
+    });
+
+  if (error) {
+    console.error("Errore salvataggio pronostico:", error.message);
+    throw error;
+  }
+
+  return true;
+}
+
 async function pitchGet(path, params = {}) {
   const url = new URL(API_BASE + path);
 
@@ -481,7 +517,22 @@ const reliability = {
         score: `${item.home}-${item.away}`,
         probability: percent(item.probability)
       }));
-
+   // SALVA LE PROBABILITA' DEL PRONOSTICO
+if (new Date(fixture.date) > new Date()) {
+  await savePredictionToDatabase(matchId, {
+    "1": percent(homeWin),
+    "X": percent(draw),
+    "2": percent(awayWin),
+    "over_1_5": percent(over(1)),
+    "under_1_5": percent(under(1)),
+    "over_2_5": percent(over(2)),
+    "under_2_5": percent(under(2)),
+    "over_3_5": percent(over(3)),
+    "under_3_5": percent(under(3)),
+    "btts_yes": percent(bttsYes),
+    "btts_no": percent(1 - bttsYes)
+  });
+}
     res.json({
       ok: true,
       model: "Poisson basato sulle medie ponderate delle ultime 10 partite (peso 0,75)",
