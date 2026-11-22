@@ -9,7 +9,7 @@ app.use(express.json({ limit: "20kb" }));
 
 const PORT = process.env.PORT || 10000;
 const SPORTAPI_URL = "https://api.pitchapi.dev/v1";
-const SPORTAPI_KEY = String(process.env.SPORTAPI_KEY || "").trim();
+const SPORTAPI_KEY = String(process.env.PITCHAPI_KEY || "").trim();
 const ACCESS_TOKEN = String(process.env.PREDICTOR_ACCESS_TOKEN || "").trim();
 
 app.use("/api/", rateLimit({
