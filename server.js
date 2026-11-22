@@ -8,7 +8,7 @@ console.log("SPORTAPI_KEY presente:", Boolean(process.env.SPORTAPI_KEY));
 console.log("SPORTAPI_KEY lunghezza:", process.env.SPORTAPI_KEY?.length || 0);
 const PORT = process.env.PORT || 10000;
 const SPORTAPI_URL = "https://sportapi.ai/api";
-
+const SPORTAPI_KEY = String(process.env.SPORTAPI_KEY || "").trim();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use(express.json({ limit: "20kb" }));
@@ -61,27 +61,23 @@ function requireAccess(req, res, next) {
 
 // COLLEGAMENTO SPORTAPI
 async function sportGet(path) {
-  const apiKey = process.env.SPORTAPI_KEY;
-
-  if (!apiKey) {
+  if (!SPORTAPI_KEY) {
     throw new Error("SPORTAPI_KEY non configurata");
   }
 
-  const response = await fetch(
-    `${SPORTAPI_URL}${path}`,
-    {
-      method: "GET",
-      headers: {
-        "X-Api-Key": apiKey,
-        "Accept": "application/json"
-      },
-      signal: AbortSignal.timeout(20000)
-    }
-  );
+  const response = await fetch(`${SPORTAPI_URL}${path}`, {
+    method: "GET",
+    headers: {
+      "X-Api-Key": SPORTAPI_KEY,
+      "Accept": "application/json"
+    },
+    signal: AbortSignal.timeout(20000)
+  });
 
   const text = await response.text();
 
   let data;
+
   try {
     data = JSON.parse(text);
   } catch {
@@ -92,6 +88,7 @@ async function sportGet(path) {
     const error = new Error(
       data.error || data.message || "Errore SportAPI"
     );
+
     error.status = response.status;
     throw error;
   }
@@ -110,13 +107,15 @@ function handleError(res, error) {
 }
 
 // STATUS SERVER
+// STATUS SERVER
 app.get("/api/status", (req, res) => {
   res.json({
     ok: true,
     server: "Football Predictor AI",
     provider: "SportAPI",
     database: "Supabase configurato",
-    sportapiKeyConfigured: Boolean(process.env.SPORTAPI_KEY),
+    sportapiKeyConfigured: Boolean(SPORTAPI_KEY),
+    sportapiKeyLength: SPORTAPI_KEY.length,
     accessTokenConfigured: Boolean(process.env.PREDICTOR_ACCESS_TOKEN)
   });
 });
