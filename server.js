@@ -790,9 +790,9 @@ function calculatePrediction(fixture, history) {
     (awayVenueAgainst / safeHomeLeague);
 
   const venueAwayLambda =
-    safeAwayLeague *
-    (awayVenueFor / safeAwayLeague) *
-    (homeVenueAgainst / safeHomeLeague);
+  safeAwayLeague *
+  (awayVenueFor / safeAwayLeague) *
+  (homeVenueAgainst / safeAwayLeague);
 
   // 40% forma generale e 60% rendimento casa/trasferta.
   const homeLambda = Math.max(
