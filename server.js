@@ -1,9 +1,10 @@
-
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
+const path = require("path");
 
 const app = express();
+
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use(express.json({ limit: "20kb" }));
@@ -20,16 +21,26 @@ app.use("/api/", rateLimit({
   legacyHeaders: false
 }));
 
+// ==========================================
 // SUPABASE
+// ==========================================
+
 let supabase = null;
-if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+
+if (
+  process.env.SUPABASE_URL &&
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+) {
   supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY
   );
 }
 
+// ==========================================
 // AUTENTICAZIONE
+// ==========================================
+
 function requireAccess(req, res, next) {
   if (!ACCESS_TOKEN) {
     return res.status(503).json({
@@ -39,7 +50,9 @@ function requireAccess(req, res, next) {
   }
 
   const auth = req.get("authorization") || "";
-  const supplied = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const supplied = auth.startsWith("Bearer ")
+    ? auth.slice(7).trim()
+    : "";
 
   if (!supplied || supplied !== ACCESS_TOKEN) {
     return res.status(401).json({
@@ -47,6 +60,7 @@ function requireAccess(req, res, next) {
       error: "Accesso non autorizzato."
     });
   }
+
   next();
 }
 
@@ -57,6 +71,7 @@ function requireSportApi(req, res, next) {
       error: "PITCHAPI_KEY non configurata su Render."
     });
   }
+
   next();
 }
 
@@ -67,36 +82,50 @@ function requireDatabase(req, res, next) {
       error: "SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY mancanti."
     });
   }
+
   next();
 }
 
+// Protezione di tutte le API tranne status
 app.use("/api", (req, res, next) => {
-  if (req.path === "/status") return next();
+  if (req.path === "/status") {
+    return next();
+  }
+
   return requireAccess(req, res, next);
 });
 
+// ==========================================
 // PITCHAPI
-async function sportGet(path) {
+// ==========================================
+
+async function sportGet(endpoint) {
   if (!PITCHAPI_KEY) {
     throw new Error("PITCHAPI_KEY non configurata.");
   }
 
-  const response = await fetch(`${PITCHAPI_URL}${path}`, {
-    method: "GET",
-    headers: {
-      "X-API-KEY": PITCHAPI_KEY,
-      "Accept": "application/json"
-    },
-    signal: AbortSignal.timeout(20000)
-  });
+  const response = await fetch(
+    `${PITCHAPI_URL}${endpoint}`,
+    {
+      method: "GET",
+      headers: {
+        "X-API-KEY": PITCHAPI_KEY,
+        "Accept": "application/json"
+      },
+      signal: AbortSignal.timeout(20000)
+    }
+  );
 
   const raw = await response.text();
+
   let body;
 
   try {
     body = raw ? JSON.parse(raw) : {};
   } catch {
-    throw new Error("PitchAPI ha restituito una risposta non JSON.");
+    throw new Error(
+      "PitchAPI ha restituito una risposta non JSON."
+    );
   }
 
   if (!response.ok) {
@@ -109,6 +138,7 @@ async function sportGet(path) {
 
     error.status = response.status;
     error.details = body;
+
     throw error;
   }
 
@@ -125,26 +155,54 @@ function handleError(res, error) {
   });
 }
 
+// ==========================================
 // FUNZIONI GENERALI
+// ==========================================
+
 function getNumber(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
   const n = Number.parseFloat(
-    String(value ?? "").replace(",", ".")
+    String(value).replace(",", ".")
   );
 
   return Number.isFinite(n) ? n : null;
 }
 
 function validDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+  const date = String(value || "");
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return false;
+  }
+
+  const parsed = new Date(`${date}T00:00:00Z`);
+
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date
+  );
 }
 
 function validNumericId(value) {
-  return /^[A-Za-z]_[A-Za-z0-9]+$/.test(String(value || ""));
+  return /^[A-Za-z]_[A-Za-z0-9]+$/.test(
+    String(value || "")
+  );
 }
 
 function getMatches(body) {
   if (Array.isArray(body?.data?.matches)) {
     return body.data.matches;
+  }
+
+  if (Array.isArray(body?.response)) {
+    return body.response;
   }
 
   if (Array.isArray(body?.data)) {
@@ -155,33 +213,56 @@ function getMatches(body) {
     return body.matches;
   }
 
+  if (Array.isArray(body?.fixtures)) {
+    return body.fixtures;
+  }
+
   return [];
 }
 
 function getHomeName(match) {
   return typeof match.home_team === "string"
     ? match.home_team
-    : match.home_team?.name || match.home_name || null;
+    : match.home_team?.name ||
+      match.home_name ||
+      match.home?.name ||
+      null;
 }
 
 function getAwayName(match) {
   return typeof match.away_team === "string"
     ? match.away_team
-    : match.away_team?.name || match.away_name || null;
+    : match.away_team?.name ||
+      match.away_name ||
+      match.away?.name ||
+      null;
 }
 
 function getHomeId(match) {
-  return match.home_id ?? match.home_team?.id ?? null;
+  return (
+    match.home_id ??
+    match.home_team_id ??
+    match.home_team?.id ??
+    match.home?.id ??
+    null
+  );
 }
 
 function getAwayId(match) {
-  return match.away_id ?? match.away_team?.id ?? null;
+  return (
+    match.away_id ??
+    match.away_team_id ??
+    match.away_team?.id ??
+    match.away?.id ??
+    null
+  );
 }
 
 function getHomeScore(match) {
   return getNumber(
     match.home_score ??
     match.score_home ??
+    match.home_goals ??
     match.score?.home
   );
 }
@@ -190,12 +271,15 @@ function getAwayScore(match) {
   return getNumber(
     match.away_score ??
     match.score_away ??
+    match.away_goals ??
     match.score?.away
   );
 }
 
 function isFinished(match) {
-  const status = String(match.status || "").toUpperCase();
+  const status = String(
+    match.status || ""
+  ).toUpperCase();
 
   return [
     "FT",
@@ -203,38 +287,67 @@ function isFinished(match) {
     "PENS",
     "FINISHED",
     "COMPLETED"
-  ].includes(status) ||
-    (getHomeScore(match) !== null && getAwayScore(match) !== null);
+  ].includes(status);
 }
 
+// ==========================================
 // NORMALIZZAZIONE PARTITE
-function normalizeFixture(match, seasonOverride) {
-  const leagueId = match.league_id ?? match.league?.id;
+// ==========================================
 
-  const season = seasonOverride ||
+function normalizeFixture(match, seasonOverride) {
+  const leagueId =
+    match.league_id ??
+    match.league?.id ??
+    match.competition?.id;
+
+  const date =
+    match.kickoff_utc ||
+    match.datetime ||
+    match.date ||
+    match.match_date ||
+    null;
+
+  const season =
+    seasonOverride ||
     match.season ||
-    String((match.date || match.datetime || "").slice(0, 4));
+    (date ? String(date).slice(0, 4) : null);
 
   return {
     id: String(match.id),
+
     league_id: String(leagueId ?? "unknown"),
-    league_name: match.league_name || match.league?.name || null,
-    season: String(season),
+
+    league_name:
+      match.league_name ||
+      match.league?.name ||
+      match.competition?.name ||
+      null,
+
+    season: String(season || ""),
+
     home_team: getHomeName(match) || "Squadra casa",
     away_team: getAwayName(match) || "Squadra ospite",
-    match_date:
-      match.kickoff_utc ||
-      match.datetime ||
-      match.date ||
-      null,
+
+    home_team_id: getHomeId(match),
+    away_team_id: getAwayId(match),
+
+    match_date: date,
+
     home_goals: getHomeScore(match),
     away_goals: getAwayScore(match),
+
     status: match.status || null
   };
 }
 
+// ==========================================
 // SALVATAGGIO SUPABASE
-async function saveMatchesToDatabase(matches, seasonOverride) {
+// ==========================================
+
+async function saveMatchesToDatabase(
+  matches,
+  seasonOverride
+) {
   if (!supabase) {
     throw new Error("Supabase non configurato.");
   }
@@ -244,26 +357,41 @@ async function saveMatchesToDatabase(matches, seasonOverride) {
   }
 
   const rows = matches
-    .filter(m =>
-      m &&
-      m.id !== undefined &&
-      getHomeName(m) &&
-      getAwayName(m)
+    .filter(match =>
+      match &&
+      match.id !== undefined &&
+      getHomeName(match) &&
+      getAwayName(match)
     )
-    .map(m => normalizeFixture(m, seasonOverride));
+    .map(match =>
+      normalizeFixture(match, seasonOverride)
+    )
+    .filter(match =>
+      match.id &&
+      match.league_id &&
+      match.home_team &&
+      match.away_team
+    );
 
-  if (!rows.length) return 0;
+  if (!rows.length) {
+    return 0;
+  }
 
   const { error } = await supabase
     .from("matches")
     .upsert(rows, { onConflict: "id" });
 
-  if (error) throw error;
+  if (error) {
+    throw error;
+  }
 
   return rows.length;
 }
 
-async function getLeagueMatchesFromDatabase(leagueId, season) {
+async function getLeagueMatchesFromDatabase(
+  leagueId,
+  season
+) {
   if (!supabase) {
     throw new Error("Supabase non configurato.");
   }
@@ -280,26 +408,40 @@ async function getLeagueMatchesFromDatabase(leagueId, season) {
 
   const { data, error } = await query.limit(5000);
 
-  if (error) throw error;
+  if (error) {
+    throw error;
+  }
 
   return data || [];
 }
 
+// ==========================================
 // MODELLO POISSON
+// ==========================================
+
 function weightedAverage(sample, key) {
-  if (!sample.length) return 0;
+  if (!sample.length) {
+    return 0;
+  }
 
   let weightedSum = 0;
   let totalWeight = 0;
 
   sample.forEach((item, index) => {
     const weight = Math.pow(0.75, index);
+    const value = getNumber(item[key]);
 
-    weightedSum += item[key] * weight;
+    if (value === null) {
+      return;
+    }
+
+    weightedSum += value * weight;
     totalWeight += weight;
   });
 
-  return totalWeight ? weightedSum / totalWeight : 0;
+  return totalWeight
+    ? weightedSum / totalWeight
+    : 0;
 }
 
 function poissonProbability(lambda, goals) {
@@ -341,8 +483,10 @@ function buildGoalModel(homeLambda, awayLambda) {
     }
   }
 
-  for (const item of matrix) {
-    item.probability /= total;
+  if (total > 0) {
+    for (const item of matrix) {
+      item.probability /= total;
+    }
   }
 
   return matrix;
@@ -370,28 +514,52 @@ function getReliability(probability, sampleSize) {
   };
 }
 
+// ==========================================
 // CAMPIONI STORICI
-function sampleForTeam(matches, teamId, beforeDate) {
+// ==========================================
+
+function sampleForTeam(
+  matches,
+  teamId,
+  beforeDate
+) {
   return matches
-    .filter(match =>
-      match.match_date &&
-      new Date(match.match_date) < new Date(beforeDate) &&
-      (
-        String(match.home_team_id || match.home_id || "") === String(teamId) ||
-        String(match.away_team_id || match.away_id || "") === String(teamId)
-      ) &&
-      match.home_goals !== null &&
-      match.home_goals !== undefined &&
-      match.away_goals !== null &&
-      match.away_goals !== undefined
-    )
+    .filter(match => {
+      const date = match.match_date || match.date;
+
+      return (
+        date &&
+        new Date(date) < new Date(beforeDate) &&
+        (
+          String(
+            match.home_team_id ||
+            match.home_id ||
+            ""
+          ) === String(teamId) ||
+          String(
+            match.away_team_id ||
+            match.away_id ||
+            ""
+          ) === String(teamId)
+        ) &&
+        match.home_goals !== null &&
+        match.home_goals !== undefined &&
+        match.away_goals !== null &&
+        match.away_goals !== undefined
+      );
+    })
     .sort((a, b) =>
-      new Date(b.match_date) - new Date(a.match_date)
+      new Date(b.match_date || b.date) -
+      new Date(a.match_date || a.date)
     )
     .slice(0, 10)
     .map(match => {
       const home =
-        String(match.home_team_id || match.home_id || "") === String(teamId);
+        String(
+          match.home_team_id ||
+          match.home_id ||
+          ""
+        ) === String(teamId);
 
       return {
         scored: Number(
@@ -404,7 +572,11 @@ function sampleForTeam(matches, teamId, beforeDate) {
     });
 }
 
-function sampleForTeamByName(matches, teamName, beforeDate) {
+function sampleForTeamByName(
+  matches,
+  teamName,
+  beforeDate
+) {
   const target = String(teamName || "")
     .trim()
     .toLowerCase();
@@ -421,14 +593,15 @@ function sampleForTeamByName(matches, teamName, beforeDate) {
         .trim()
         .toLowerCase();
 
+      const homeGoals = getNumber(match.home_goals);
+      const awayGoals = getNumber(match.away_goals);
+
       return (
         date &&
         new Date(date) < new Date(beforeDate) &&
         (home === target || away === target) &&
-        match.home_goals !== null &&
-        match.home_goals !== undefined &&
-        match.away_goals !== null &&
-        match.away_goals !== undefined
+        homeGoals !== null &&
+        awayGoals !== null
       );
     })
     .sort((a, b) =>
@@ -438,7 +611,9 @@ function sampleForTeamByName(matches, teamName, beforeDate) {
     .slice(0, 10)
     .map(match => {
       const home =
-        String(match.home_team).trim().toLowerCase() === target;
+        String(match.home_team || "")
+          .trim()
+          .toLowerCase() === target;
 
       return {
         scored: Number(
@@ -451,15 +626,28 @@ function sampleForTeamByName(matches, teamName, beforeDate) {
     });
 }
 
+// ==========================================
 // CALCOLO PRONOSTICO
+// ==========================================
+
 function calculatePrediction(fixture, history) {
-  const homeName = fixture.home_team || getHomeName(fixture);
-  const awayName = fixture.away_team || getAwayName(fixture);
+  const homeName =
+    fixture.home_team || getHomeName(fixture);
+
+  const awayName =
+    fixture.away_team || getAwayName(fixture);
 
   const fixtureDate =
     fixture.match_date ||
     fixture.date ||
     fixture.datetime;
+
+  if (!fixtureDate || !homeName || !awayName) {
+    return {
+      ok: false,
+      error: "Dati della partita incompleti."
+    };
+  }
 
   const homeSample = sampleForTeamByName(
     history,
@@ -473,7 +661,10 @@ function calculatePrediction(fixture, history) {
     fixtureDate
   );
 
-  if (homeSample.length < 5 || awaySample.length < 5) {
+  if (
+    homeSample.length < 5 ||
+    awaySample.length < 5
+  ) {
     return {
       ok: false,
       error: "Dati insufficienti: servono almeno 5 risultati precedenti per entrambe le squadre.",
@@ -484,10 +675,25 @@ function calculatePrediction(fixture, history) {
     };
   }
 
-  const homeFor = weightedAverage(homeSample, "scored");
-  const homeAgainst = weightedAverage(homeSample, "conceded");
-  const awayFor = weightedAverage(awaySample, "scored");
-  const awayAgainst = weightedAverage(awaySample, "conceded");
+  const homeFor = weightedAverage(
+    homeSample,
+    "scored"
+  );
+
+  const homeAgainst = weightedAverage(
+    homeSample,
+    "conceded"
+  );
+
+  const awayFor = weightedAverage(
+    awaySample,
+    "scored"
+  );
+
+  const awayAgainst = weightedAverage(
+    awaySample,
+    "conceded"
+  );
 
   const homeLambda = Math.max(
     0.10,
@@ -499,14 +705,19 @@ function calculatePrediction(fixture, history) {
     Math.min(5, (awayFor + homeAgainst) / 2)
   );
 
-  const matrix = buildGoalModel(homeLambda, awayLambda);
+  const matrix = buildGoalModel(
+    homeLambda,
+    awayLambda
+  );
 
-  const sum = fn => matrix
-    .filter(fn)
-    .reduce(
-      (total, item) => total + item.probability,
-      0
-    );
+  const sum = fn =>
+    matrix
+      .filter(fn)
+      .reduce(
+        (total, item) =>
+          total + item.probability,
+        0
+      );
 
   const homeWin = sum(x => x.home > x.away);
   const draw = sum(x => x.home === x.away);
@@ -515,7 +726,8 @@ function calculatePrediction(fixture, history) {
   const over = line =>
     sum(x => x.home + x.away > line);
 
-  const under = line => 1 - over(line);
+  const under = line =>
+    1 - over(line);
 
   const bttsYes = sum(
     x => x.home > 0 && x.away > 0
@@ -546,7 +758,9 @@ function calculatePrediction(fixture, history) {
 
   const reliability = {};
 
-  for (const [market, probability] of Object.entries(probabilities)) {
+  for (const [market, probability] of Object.entries(
+    probabilities
+  )) {
     reliability[market] = getReliability(
       probability,
       sampleSize
@@ -554,7 +768,9 @@ function calculatePrediction(fixture, history) {
   }
 
   const exactScores = [...matrix]
-    .sort((a, b) => b.probability - a.probability)
+    .sort((a, b) =>
+      b.probability - a.probability
+    )
     .slice(0, 5)
     .map(item => ({
       score: `${item.home}-${item.away}`,
@@ -564,11 +780,15 @@ function calculatePrediction(fixture, history) {
   return {
     ok: true,
 
-    model: "Poisson con medie ponderate delle ultime 10 partite (peso 0,75)",
+    model:
+      "Poisson con medie ponderate delle ultime 10 partite (peso 0,75)",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
-      away: Number(awayLambda.toFixed(2))
+      away: Number(awayLambda.toFixed(2)),
+      total: Number(
+        (homeLambda + awayLambda).toFixed(2)
+      )
     },
 
     probabilities,
@@ -583,7 +803,10 @@ function calculatePrediction(fixture, history) {
   };
 }
 
+// ==========================================
 // STATUS SERVER E CAMPIONATI
+// ==========================================
+
 app.get("/api/status", async (req, res) => {
   let leagues = [];
   let providerConnected = false;
@@ -594,11 +817,28 @@ app.get("/api/status", async (req, res) => {
 
       leagues = Array.isArray(body?.data?.leagues)
         ? body.data.leagues
-        : (Array.isArray(body?.data) ? body.data : []);
+        : getMatches(body);
+
+      if (
+        !leagues.length &&
+        Array.isArray(body?.data)
+      ) {
+        leagues = body.data;
+      }
+
+      if (
+        !leagues.length &&
+        Array.isArray(body?.leagues)
+      ) {
+        leagues = body.leagues;
+      }
 
       providerConnected = true;
     } catch (error) {
-      console.error("PitchAPI status:", error.message);
+      console.error(
+        "PitchAPI status:",
+        error.message
+      );
     }
   }
 
@@ -615,86 +855,119 @@ app.get("/api/status", async (req, res) => {
   });
 });
 
+// ==========================================
 // TEST PITCHAPI
-app.get("/api/test-pitchapi", requireSportApi, async (req, res) => {
-  try {
-    const body = await sportGet("/leagues");
+// ==========================================
 
-    res.json({
-      ok: true,
-      connected: true,
-      response: body
-    });
-  } catch (error) {
-    handleError(res, error);
+app.get(
+  "/api/test-pitchapi",
+  requireSportApi,
+  async (req, res) => {
+    try {
+      const body = await sportGet("/leagues");
+
+      res.json({
+        ok: true,
+        connected: true,
+        response: body
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
-});
+);
 
+// ==========================================
 // TEST DATABASE
-app.get("/api/test-database", requireDatabase, async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from("matches")
-      .select("id")
-      .limit(1);
+// ==========================================
 
-    if (error) throw error;
+app.get(
+  "/api/test-database",
+  requireDatabase,
+  async (req, res) => {
+    try {
+      const { error } = await supabase
+        .from("matches")
+        .select("id")
+        .limit(1);
 
-    res.json({
-      ok: true,
-      connected: true,
-      database: "Supabase",
-      message: "Collegamento al database riuscito."
-    });
-  } catch (error) {
-    handleError(res, error);
+      if (error) {
+        throw error;
+      }
+
+      res.json({
+        ok: true,
+        connected: true,
+        database: "Supabase",
+        message: "Collegamento al database riuscito."
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
-});
+);
 
+// ==========================================
 // CAMPIONATI
-app.get("/api/leagues", requireSportApi, async (req, res) => {
-  try {
-    const body = await sportGet("/leagues");
+// ==========================================
 
-    res.json({
-      ok: true,
-      response: body
-    });
-  } catch (error) {
-    handleError(res, error);
+app.get(
+  "/api/leagues",
+  requireSportApi,
+  async (req, res) => {
+    try {
+      const body = await sportGet("/leagues");
+
+      res.json({
+        ok: true,
+        response: body
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
-});
+);
 
+// ==========================================
 // PARTITE DI UNA DATA
-app.get("/api/fixtures", requireSportApi, async (req, res) => {
-  const date = String(req.query.date || "");
+// ==========================================
 
-  if (!validDate(date)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Inserisci date=YYYY-MM-DD."
-    });
+app.get(
+  "/api/fixtures",
+  requireSportApi,
+  async (req, res) => {
+    const date = String(req.query.date || "");
+
+    if (!validDate(date)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Inserisci date=YYYY-MM-DD."
+      });
+    }
+
+    try {
+      const body = await sportGet(
+        `/date/${encodeURIComponent(date)}`
+      );
+
+      const matches = getMatches(body);
+
+      res.json({
+        ok: true,
+        date,
+        results: matches.length,
+        response: matches
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
+);
 
-  try {
-    const body = await sportGet(
-      `/date/${encodeURIComponent(date)}`
-    );
-
-    const matches = getMatches(body);
-
-    res.json({
-      ok: true,
-      date,
-      results: matches.length,
-      response: matches
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
+// ==========================================
 // SINCRONIZZA UNA DATA
+// ==========================================
+
 app.post(
   "/api/sync/date/:date",
   requireSportApi,
@@ -715,7 +988,10 @@ app.post(
       );
 
       const matches = getMatches(body);
-      const season = String(req.query.season || date.slice(0, 4));
+
+      const season = String(
+        req.query.season || date.slice(0, 4)
+      );
 
       const saved = await saveMatchesToDatabase(
         matches,
@@ -735,7 +1011,10 @@ app.post(
   }
 );
 
+// ==========================================
 // SINCRONIZZA INTERVALLO MASSIMO 14 GIORNI
+// ==========================================
+
 app.post(
   "/api/sync/range",
   requireSportApi,
@@ -747,7 +1026,8 @@ app.post(
     if (
       !validDate(from) ||
       !validDate(to) ||
-      new Date(to) < new Date(from)
+      new Date(`${to}T00:00:00Z`) <
+        new Date(`${from}T00:00:00Z`)
     ) {
       return res.status(400).json({
         ok: false,
@@ -771,6 +1051,7 @@ app.post(
 
     let received = 0;
     let saved = 0;
+
     const errors = [];
 
     for (let i = 0; i < days; i++) {
@@ -780,17 +1061,24 @@ app.post(
         dateObject.getUTCDate() + i
       );
 
-      const date = dateObject.toISOString().slice(0, 10);
+      const date = dateObject
+        .toISOString()
+        .slice(0, 10);
 
       try {
-        const body = await sportGet(`/date/${date}`);
+        const body = await sportGet(
+          `/date/${encodeURIComponent(date)}`
+        );
+
         const matches = getMatches(body);
 
         received += matches.length;
 
         saved += await saveMatchesToDatabase(
           matches,
-          String(req.query.season || date.slice(0, 4))
+          String(
+            req.query.season || date.slice(0, 4)
+          )
         );
       } catch (error) {
         errors.push({
@@ -812,30 +1100,40 @@ app.post(
   }
 );
 
+// ==========================================
 // DETTAGLIO PARTITA
-app.get("/api/fixture/:id", requireSportApi, async (req, res) => {
-  if (!validNumericId(req.params.id)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID partita non valido."
-    });
+// ==========================================
+
+app.get(
+  "/api/fixture/:id",
+  requireSportApi,
+  async (req, res) => {
+    if (!validNumericId(req.params.id)) {
+      return res.status(400).json({
+        ok: false,
+        error: "ID partita non valido."
+      });
+    }
+
+    try {
+      const body = await sportGet(
+        `/matches/${encodeURIComponent(req.params.id)}`
+      );
+
+      res.json({
+        ok: true,
+        response: body
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
+);
 
-  try {
-    const body = await sportGet(
-      `/matches/${encodeURIComponent(req.params.id)}`
-    );
+// ==========================================
+// STATISTICHE, EVENTI E DATI AVANZATI
+// ==========================================
 
-    res.json({
-      ok: true,
-      response: body
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
-// STATISTICHE, EVENTI, FORMAZIONI E DATI AVANZATI
 const fixtureSubroutes = [
   "statistics",
   "stats",
@@ -863,9 +1161,10 @@ for (const route of fixtureSubroutes) {
       }
 
       try {
-        const endpoint = route === "statistics"
-          ? "stats"
-          : route;
+        const endpoint =
+          route === "statistics"
+            ? "stats"
+            : route;
 
         const body = await sportGet(
           `/matches/${encodeURIComponent(req.params.id)}/${endpoint}`
@@ -882,272 +1181,337 @@ for (const route of fixtureSubroutes) {
   );
 }
 
+// ==========================================
 // SQUADRA
-app.get("/api/team/:id", requireSportApi, async (req, res) => {
-  if (!validNumericId(req.params.id)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID squadra non valido."
-    });
+// ==========================================
+
+app.get(
+  "/api/team/:id",
+  requireSportApi,
+  async (req, res) => {
+    if (!validNumericId(req.params.id)) {
+      return res.status(400).json({
+        ok: false,
+        error: "ID squadra non valido."
+      });
+    }
+
+    try {
+      const body = await sportGet(
+        `/teams/${encodeURIComponent(req.params.id)}`
+      );
+
+      res.json({
+        ok: true,
+        response: body
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
+);
 
-  try {
-    const body = await sportGet(
-      `/teams/${encodeURIComponent(req.params.id)}`
-    );
-
-    res.json({
-      ok: true,
-      response: body
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
+// ==========================================
 // GIOCATORI SQUADRA
-app.get("/api/team/:id/players", requireSportApi, async (req, res) => {
-  if (!validNumericId(req.params.id)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID squadra non valido."
-    });
+// ==========================================
+
+app.get(
+  "/api/team/:id/players",
+  requireSportApi,
+  async (req, res) => {
+    if (!validNumericId(req.params.id)) {
+      return res.status(400).json({
+        ok: false,
+        error: "ID squadra non valido."
+      });
+    }
+
+    try {
+      const body = await sportGet(
+        `/teams/${encodeURIComponent(req.params.id)}/players`
+      );
+
+      res.json({
+        ok: true,
+        response: body
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
+);
 
-  try {
-    const body = await sportGet(
-      `/teams/${encodeURIComponent(req.params.id)}/players`
-    );
-
-    res.json({
-      ok: true,
-      response: body
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
+// ==========================================
 // CLASSIFICHE
-app.get("/api/standings/:leagueId", requireSportApi, async (req, res) => {
-  if (!validNumericId(req.params.leagueId)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID campionato non valido."
-    });
+// ==========================================
+
+app.get(
+  "/api/standings/:leagueId",
+  requireSportApi,
+  async (req, res) => {
+    if (!validNumericId(req.params.leagueId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "ID campionato non valido."
+      });
+    }
+
+    try {
+      const body = await sportGet(
+        `/standings/${encodeURIComponent(req.params.leagueId)}`
+      );
+
+      res.json({
+        ok: true,
+        response: body
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
+);
 
-  try {
-    const body = await sportGet(
-      `/standings/${encodeURIComponent(req.params.leagueId)}`
-    );
-
-    res.json({
-      ok: true,
-      response: body
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
+// ==========================================
 // PARTITE DEL CAMPIONATO IN SUPABASE
-app.get("/api/league/:id/matches", requireDatabase, async (req, res) => {
-  const leagueId = req.params.id;
-  const season = req.query.season
-    ? String(req.query.season)
-    : null;
+// ==========================================
 
-  if (!validNumericId(leagueId)) {
-    return res.status(400).json({
-      ok: false,
-      error: "ID campionato non valido."
-    });
+app.get(
+  "/api/league/:id/matches",
+  requireDatabase,
+  async (req, res) => {
+    const leagueId = req.params.id;
+
+    const season = req.query.season
+      ? String(req.query.season)
+      : null;
+
+    if (!validNumericId(leagueId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "ID campionato non valido."
+      });
+    }
+
+    try {
+      const matches = await getLeagueMatchesFromDatabase(
+        leagueId,
+        season
+      );
+
+      res.json({
+        ok: true,
+        league_id: leagueId,
+        season,
+        matches_count: matches.length,
+        matches
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
   }
+);
 
-  try {
-    const matches = await getLeagueMatchesFromDatabase(
-      leagueId,
-      season
-    );
-
-    res.json({
-      ok: true,
-      league_id: leagueId,
-      season,
-      matches_count: matches.length,
-      matches
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
+// ==========================================
 // PRONOSTICO PARTITA
-app.get("/api/fixture/:id/predictions", requireDatabase, async (req, res) => {
-  const matchId = String(req.params.id);
+// ==========================================
 
-  try {
-    const { data: fixture, error } = await supabase
-      .from("matches")
-      .select("*")
-      .eq("id", matchId)
-      .maybeSingle();
+app.get(
+  "/api/fixture/:id/predictions",
+  requireDatabase,
+  async (req, res) => {
+    const matchId = String(req.params.id);
 
-    if (error) throw error;
+    try {
+      const { data: fixture, error } = await supabase
+        .from("matches")
+        .select("*")
+        .eq("id", matchId)
+        .maybeSingle();
 
-    if (!fixture) {
-      return res.status(404).json({
-        ok: false,
-        error: "Partita non trovata in Supabase. Sincronizza prima la data."
-      });
-    }
-
-    const history = await getLeagueMatchesFromDatabase(
-      fixture.league_id,
-      fixture.season
-    );
-
-    const prediction = calculatePrediction(
-      fixture,
-      history
-    );
-
-    if (!prediction.ok) {
-      return res.status(422).json({
-        ok: false,
-        match: fixture,
-        ...prediction
-      });
-    }
-
-    res.json({
-      ok: true,
-      model: prediction.model,
-
-      match: {
-        id: fixture.id,
-        league: fixture.league_name,
-        season: fixture.season,
-        home_team: fixture.home_team,
-        away_team: fixture.away_team,
-        date: fixture.match_date,
-        status: fixture.status
-      },
-
-      samples: prediction.samples,
-      expected_goals: prediction.expected_goals,
-      probabilities: prediction.probabilities,
-      reliability: prediction.reliability,
-      exact_scores: prediction.exact_scores,
-
-      disclaimer: "Pronostico statistico, non garanzia del risultato."
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
-// BACKTEST MODELLO
-app.get("/api/backtest/:leagueId", requireDatabase, async (req, res) => {
-  try {
-    const leagueId = String(req.params.leagueId);
-
-    const limit = Math.min(
-      Math.max(Number(req.query.limit) || 100, 1),
-      300
-    );
-
-    const { data, error } = await supabase
-      .from("matches")
-      .select("*")
-      .eq("league_id", leagueId)
-      .not("home_goals", "is", null)
-      .not("away_goals", "is", null)
-      .order("match_date", { ascending: true })
-      .limit(limit);
-
-    if (error) throw error;
-
-    const history = data || [];
-    const results = [];
-
-    for (const match of history) {
-      if (
-        match.home_goals === null ||
-        match.away_goals === null ||
-        !match.match_date
-      ) {
-        continue;
+      if (error) {
+        throw error;
       }
 
+      if (!fixture) {
+        return res.status(404).json({
+          ok: false,
+          error: "Partita non trovata in Supabase. Sincronizza prima la data."
+        });
+      }
+
+      const history = await getLeagueMatchesFromDatabase(
+        fixture.league_id,
+        fixture.season
+      );
+
       const prediction = calculatePrediction(
-        match,
+        fixture,
         history
       );
 
-      if (!prediction || !prediction.probabilities) {
-        continue;
+      if (!prediction.ok) {
+        return res.status(422).json({
+          ok: false,
+          match: fixture,
+          ...prediction
+        });
       }
 
-      const p = prediction.probabilities;
+      res.json({
+        ok: true,
+        model: prediction.model,
 
-      const actual = {
-        home: Number(match.home_goals),
-        away: Number(match.away_goals)
-      };
+        match: {
+          id: fixture.id,
+          league: fixture.league_name,
+          season: fixture.season,
+          home_team: fixture.home_team,
+          away_team: fixture.away_team,
+          date: fixture.match_date,
+          status: fixture.status
+        },
 
-      const actualResult =
-        actual.home > actual.away ? "1" :
-        actual.home < actual.away ? "2" :
-        "X";
+        samples: prediction.samples,
+        expected_goals: prediction.expected_goals,
+        probabilities: prediction.probabilities,
+        reliability: prediction.reliability,
+        exact_scores: prediction.exact_scores,
 
-      const predictedResult = ["1", "X", "2"].sort(
-        (a, b) => p[b] - p[a]
-      )[0];
-
-      results.push({
-        match_id: match.id,
-        home_team: match.home_team,
-        away_team: match.away_team,
-        actual_result: actualResult,
-        predicted_result: predictedResult,
-        correct_1x2: predictedResult === actualResult,
-        actual_goals: actual.home + actual.away,
-        probabilities: p
+        disclaimer:
+          "Pronostico statistico, non garanzia del risultato."
       });
+    } catch (error) {
+      handleError(res, error);
     }
-
-    const evaluated = results.length;
-
-    const correct = results.filter(
-      r => r.correct_1x2
-    ).length;
-
-    res.json({
-      ok: true,
-      league_id: leagueId,
-      requested_matches: limit,
-      evaluated_matches: evaluated,
-
-      accuracy_by_market: {
-        "1X2": {
-          evaluated,
-          correct,
-          accuracy: evaluated
-            ? Number((correct / evaluated * 100).toFixed(2))
-            : 0
-        }
-      },
-
-      results
-    });
-  } catch (error) {
-    handleError(res, error);
   }
-});
+);
 
-// MEDIE E STATISTICHE SQUADRA
+// ==========================================
+// BACKTEST MODELLO
+// ==========================================
+
+app.get(
+  "/api/backtest/:leagueId",
+  requireDatabase,
+  async (req, res) => {
+    try {
+      const leagueId = String(req.params.leagueId);
+
+      if (!validNumericId(leagueId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID campionato non valido."
+        });
+      }
+
+      const limit = Math.min(
+        Math.max(Number(req.query.limit) || 100, 1),
+        300
+      );
+
+      const { data, error } = await supabase
+        .from("matches")
+        .select("*")
+        .eq("league_id", leagueId)
+        .not("home_goals", "is", null)
+        .not("away_goals", "is", null)
+        .order("match_date", { ascending: true })
+        .limit(limit);
+
+      if (error) {
+        throw error;
+      }
+
+      const history = data || [];
+      const results = [];
+
+      for (const match of history) {
+        if (
+          match.home_goals === null ||
+          match.away_goals === null ||
+          !match.match_date
+        ) {
+          continue;
+        }
+
+        const prediction = calculatePrediction(
+          match,
+          history
+        );
+
+        if (
+          !prediction ||
+          !prediction.probabilities
+        ) {
+          continue;
+        }
+
+        const p = prediction.probabilities;
+
+        const actual = {
+          home: Number(match.home_goals),
+          away: Number(match.away_goals)
+        };
+
+        const actualResult =
+          actual.home > actual.away
+            ? "1"
+            : actual.home < actual.away
+              ? "2"
+              : "X";
+
+        const predictedResult = ["1", "X", "2"].sort(
+          (a, b) => p[b] - p[a]
+        )[0];
+
+        results.push({
+          match_id: match.id,
+          home_team: match.home_team,
+          away_team: match.away_team,
+          actual_result: actualResult,
+          predicted_result: predictedResult,
+          correct_1x2: predictedResult === actualResult,
+          actual_goals: actual.home + actual.away,
+          probabilities: p
+        });
+      }
+
+      const evaluated = results.length;
+
+      const correct = results.filter(
+        result => result.correct_1x2
+      ).length;
+
+      res.json({
+        ok: true,
+        league_id: leagueId,
+        requested_matches: limit,
+        evaluated_matches: evaluated,
+
+        accuracy_by_market: {
+          "1X2": {
+            evaluated,
+            correct,
+            accuracy: evaluated
+              ? Number(
+                  (correct / evaluated * 100).toFixed(2)
+                )
+              : 0
+          }
+        },
+
+        results
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+);
+
+// ==========================================
+// MEDIE E STATISTICHE SQUADRA - CORRETTE
+// ==========================================
+
 app.get(
   "/api/team/:id/averages",
   requireSportApi,
@@ -1156,17 +1520,29 @@ app.get(
     try {
       const teamId = String(req.params.id);
 
+      if (!validNumericId(teamId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID squadra non valido."
+        });
+      }
+
       const limit = Math.min(
-        Math.max(Number(req.query.last || req.query.limit) || 10, 1),
+        Math.max(
+          Number(req.query.last || req.query.limit) || 10,
+          1
+        ),
         30
       );
 
+      // Recupera i dati della squadra da PitchAPI
       const response = await sportGet(
         `/teams/${encodeURIComponent(teamId)}`
       );
 
       const teamData =
         response?.response?.[0] ||
+        response?.data?.team ||
         response?.data ||
         response;
 
@@ -1178,76 +1554,141 @@ app.get(
       if (!teamName) {
         return res.status(404).json({
           ok: false,
-          error: "Squadra non trovata nella risposta del provider."
+          error: "Squadra non trovata nella risposta di PitchAPI."
         });
       }
 
+      // Recupera le partite storiche da Supabase
       const { data, error } = await supabase
         .from("matches")
         .select("*")
-        .or(`home_team.eq.${teamName},away_team.eq.${teamName}`)
         .not("home_goals", "is", null)
         .not("away_goals", "is", null)
         .order("match_date", { ascending: false })
-        .limit(limit);
+        .limit(5000);
 
-      if (error) throw error;
-
-      const matches = data || [];
-
-      if (!matches.length) {
-        return res.json({
-          ok: true,
-          team: teamName,
-          matches_analyzed: 0,
-          message: "Nessuna partita storica disponibile."
-        });
+      if (error) {
+        throw error;
       }
+
+      const normalizedTeamName = String(teamName)
+        .trim()
+        .toLowerCase();
+
+      // Filtra le partite della squadra
+      const matches = (data || [])
+        .filter(match => {
+          const home = String(match.home_team || "")
+            .trim()
+            .toLowerCase();
+
+          const away = String(match.away_team || "")
+            .trim()
+            .toLowerCase();
+
+          return (
+            (home === normalizedTeamName ||
+             away === normalizedTeamName) &&
+            getNumber(match.home_goals) !== null &&
+            getNumber(match.away_goals) !== null
+          );
+        })
+        .slice(0, limit);
 
       let goalsFor = 0;
       let goalsAgainst = 0;
       let wins = 0;
       let draws = 0;
       let losses = 0;
+      let analyzed = 0;
 
       for (const match of matches) {
-        const isHome = match.home_team === teamName;
+        const isHome =
+          String(match.home_team || "")
+            .trim()
+            .toLowerCase() === normalizedTeamName;
 
-        const scored = Number(
+        const scored = getNumber(
           isHome ? match.home_goals : match.away_goals
         );
 
-        const conceded = Number(
+        const conceded = getNumber(
           isHome ? match.away_goals : match.home_goals
         );
 
+        if (
+          scored === null ||
+          conceded === null
+        ) {
+          continue;
+        }
+
         goalsFor += scored;
         goalsAgainst += conceded;
+        analyzed++;
 
-        if (scored > conceded) wins++;
-        else if (scored === conceded) draws++;
-        else losses++;
+        if (scored > conceded) {
+          wins++;
+        } else if (scored === conceded) {
+          draws++;
+        } else {
+          losses++;
+        }
       }
+
+      const averageGoalsFor = analyzed
+        ? Number((goalsFor / analyzed).toFixed(2))
+        : null;
+
+      const averageGoalsAgainst = analyzed
+        ? Number((goalsAgainst / analyzed).toFixed(2))
+        : null;
+
+      const averages = {
+        goals_for: averageGoalsFor,
+        goals_against: averageGoalsAgainst,
+
+        goals_scored: averageGoalsFor,
+        goals_conceded: averageGoalsAgainst,
+
+        corners: null,
+        total_shots: null,
+        shots_on_target: null,
+        yellow_cards: null,
+        red_cards: null,
+        fouls: null,
+        expected_goals: null,
+        possession: null
+      };
 
       res.json({
         ok: true,
-        team: teamName,
-        matches_analyzed: matches.length,
 
-        averages: {
-          goals_scored: Number(
-            (goalsFor / matches.length).toFixed(2)
-          ),
-          goals_conceded: Number(
-            (goalsAgainst / matches.length).toFixed(2)
-          )
+        team: {
+          id: teamId,
+          name: teamName
         },
 
-        results: {
+        matches_analyzed: analyzed,
+
+        averages,
+
+        results: [
+          {
+            team: teamName,
+            averages
+          }
+        ],
+
+        results_summary: {
           wins,
           draws,
           losses
-        }
+        },
+
+        message: analyzed
+          ? "Medie calcolate sulle partite disponibili in Supabase."
+          : "Nessuna partita storica disponibile per questa squadra."
       });
     } catch (error) {
       handleError(res, error);
@@ -1255,13 +1696,23 @@ app.get(
   }
 );
 
+// ==========================================
 // GIOCATORI E ROSA SQUADRA
+// ==========================================
+
 app.get(
   "/api/team/:id/player-averages",
   requireSportApi,
   async (req, res) => {
     try {
       const teamId = String(req.params.id);
+
+      if (!validNumericId(teamId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID squadra non valido."
+        });
+      }
 
       const response = await sportGet(
         `/teams/${encodeURIComponent(teamId)}/players`
@@ -1279,140 +1730,183 @@ app.get(
   }
 );
 
+// ==========================================
 // GENERATORE MULTIPLE
-app.get("/api/multiples", requireDatabase, async (req, res) => {
-  try {
-    const date = String(req.query.date || "").trim();
+// ==========================================
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Inserisci una data valida: YYYY-MM-DD."
-      });
-    }
+app.get(
+  "/api/multiples",
+  requireDatabase,
+  async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
 
-    const maxMatches = Math.min(
-      Math.max(Number(req.query.max_matches) || 10, 1),
-      30
-    );
-
-    const minProbability = Math.min(
-      Math.max(Number(req.query.min_probability) || 65, 50),
-      95
-    );
-
-    const { data: fixtures, error } = await supabase
-      .from("matches")
-      .select("*")
-      .gte("match_date", `${date}T00:00:00`)
-      .lt("match_date", `${date}T23:59:59.999`)
-      .order("match_date", { ascending: true });
-
-    if (error) throw error;
-
-    const selected = [];
-    const historyCache = {};
-
-    for (const match of fixtures || []) {
-      if (selected.length >= maxMatches) break;
-
-      const leagueId = String(match.league_id);
-      const season = String(match.season);
-      const cacheKey = `${leagueId}_${season}`;
-
-      if (!historyCache[cacheKey]) {
-        const { data, error: historyError } = await supabase
-          .from("matches")
-          .select("*")
-          .eq("league_id", leagueId)
-          .eq("season", season)
-          .not("home_goals", "is", null)
-          .not("away_goals", "is", null)
-          .order("match_date", { ascending: false })
-          .limit(500);
-
-        if (historyError) throw historyError;
-
-        historyCache[cacheKey] = data || [];
+      if (!validDate(date)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Inserisci una data valida: YYYY-MM-DD."
+        });
       }
 
-      const prediction = calculatePrediction(
-        match,
-        historyCache[cacheKey]
+      const maxMatches = Math.min(
+        Math.max(Number(req.query.max_matches) || 10, 1),
+        30
       );
 
-      if (!prediction?.probabilities) continue;
+      const minProbability = Math.min(
+        Math.max(
+          Number(req.query.min_probability) || 65,
+          50
+        ),
+        95
+      );
 
-      const markets = prediction.probabilities;
+      const { data: fixtures, error } = await supabase
+        .from("matches")
+        .select("*")
+        .gte("match_date", `${date}T00:00:00`)
+        .lt("match_date", `${date}T23:59:59.999`)
+        .order("match_date", { ascending: true });
 
-      const candidates = Object.entries(markets)
-        .filter(([market, probability]) =>
-          Number.isFinite(Number(probability)) &&
-          Number(probability) >= minProbability
-        )
-        .sort((a, b) => Number(b[1]) - Number(a[1]));
+      if (error) {
+        throw error;
+      }
 
-      if (!candidates.length) continue;
+      const selected = [];
+      const historyCache = {};
 
-      const [market, probability] = candidates[0];
+      for (const match of fixtures || []) {
+        if (selected.length >= maxMatches) {
+          break;
+        }
 
-      selected.push({
-        match_id: match.id,
-        league: match.league_name,
-        home_team: match.home_team,
-        away_team: match.away_team,
-        market,
-        probability: Number(probability)
+        const leagueId = String(match.league_id);
+        const season = String(match.season);
+        const cacheKey = `${leagueId}_${season}`;
+
+        if (!historyCache[cacheKey]) {
+          const { data, error: historyError } =
+            await supabase
+              .from("matches")
+              .select("*")
+              .eq("league_id", leagueId)
+              .eq("season", season)
+              .not("home_goals", "is", null)
+              .not("away_goals", "is", null)
+              .order("match_date", { ascending: false })
+              .limit(500);
+
+          if (historyError) {
+            throw historyError;
+          }
+
+          historyCache[cacheKey] = data || [];
+        }
+
+        const prediction = calculatePrediction(
+          match,
+          historyCache[cacheKey]
+        );
+
+        if (!prediction?.probabilities) {
+          continue;
+        }
+
+        const markets = prediction.probabilities;
+
+        const candidates = Object.entries(markets)
+          .filter(([market, probability]) =>
+            Number.isFinite(Number(probability)) &&
+            Number(probability) >= minProbability
+          )
+          .sort((a, b) =>
+            Number(b[1]) - Number(a[1])
+          );
+
+        if (!candidates.length) {
+          continue;
+        }
+
+        const [market, probability] = candidates[0];
+
+        selected.push({
+          match_id: match.id,
+          league: match.league_name,
+          home_team: match.home_team,
+          away_team: match.away_team,
+          market,
+          probability: Number(probability)
+        });
+      }
+
+      const combinedProbability = selected.length
+        ? selected.reduce(
+            (total, item) =>
+              total * item.probability / 100,
+            1
+          ) * 100
+        : 0;
+
+      res.json({
+        ok: true,
+        date,
+        max_matches: maxMatches,
+        minimum_probability: minProbability,
+        selected_matches: selected.length,
+
+        estimated_combined_probability: Number(
+          combinedProbability.toFixed(4)
+        ),
+
+        selections: selected,
+
+        warning:
+          "Le probabilità sono stime del modello, non garanzie. Le selezioni non sono necessariamente indipendenti."
       });
+    } catch (error) {
+      handleError(res, error);
     }
-
-    const combinedProbability = selected.length
-      ? selected.reduce(
-          (total, item) => total * item.probability / 100,
-          1
-        ) * 100
-      : 0;
-
-    res.json({
-      ok: true,
-      date,
-      max_matches: maxMatches,
-      minimum_probability: minProbability,
-      selected_matches: selected.length,
-
-      estimated_combined_probability: Number(
-        combinedProbability.toFixed(4)
-      ),
-
-      selections: selected,
-
-      warning: "Le probabilità sono stime del modello, non garanzie. Le selezioni non sono necessariamente indipendenti."
-    });
-  } catch (error) {
-    handleError(res, error);
   }
-});
+);
 
+// ==========================================
 // QUOTE
-app.get("/api/fixture/:id/odds", (req, res) => {
-  res.status(501).json({
-    ok: false,
-    available: false,
-    message: "Il collegamento a un provider di quote non è ancora configurato."
-  });
-});
+// ==========================================
 
+app.get(
+  "/api/fixture/:id/odds",
+  (req, res) => {
+    res.status(501).json({
+      ok: false,
+      available: false,
+      message:
+        "Il collegamento a un provider di quote non è ancora configurato."
+    });
+  }
+);
+
+// ==========================================
 // PAGINA PRINCIPALE
+// ==========================================
+
 app.get("/", (req, res) => {
   res.sendFile(
-    require("path").join(__dirname, "public", "index.html")
+    path.join(__dirname, "public", "index.html")
   );
 });
 
+// ==========================================
 // FILE STATICI
-app.use(express.static("public"));
+// ==========================================
 
+app.use(express.static(
+  path.join(__dirname, "public")
+));
+
+// ==========================================
 // ROTTA NON TROVATA
+// ==========================================
+
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
@@ -1421,7 +1915,10 @@ app.use((req, res) => {
   });
 });
 
+// ==========================================
 // GESTIONE ERRORI
+// ==========================================
+
 app.use((error, req, res, next) => {
   console.error("Errore server:", error.message);
 
@@ -1435,10 +1932,27 @@ app.use((error, req, res, next) => {
   });
 });
 
+// ==========================================
 // AVVIO SERVER
+// ==========================================
+
 app.listen(PORT, () => {
-  console.log(`Football Predictor AI attivo sulla porta ${PORT}`);
-  console.log("PitchAPI key configurata:", Boolean(PITCHAPI_KEY));
-  console.log("Access token configurato:", Boolean(ACCESS_TOKEN));
-  console.log("Supabase configurato:", Boolean(supabase));
+  console.log(
+    `Football Predictor AI attivo sulla porta ${PORT}`
+  );
+
+  console.log(
+    "PitchAPI key configurata:",
+    Boolean(PITCHAPI_KEY)
+  );
+
+  console.log(
+    "Access token configurato:",
+    Boolean(ACCESS_TOKEN)
+  );
+
+  console.log(
+    "Supabase configurato:",
+    Boolean(supabase)
+  );
 });
