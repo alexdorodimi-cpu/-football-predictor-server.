@@ -646,17 +646,49 @@ function sampleForTeamByName(
 // CALCOLO PRONOSTICO
 // ==========================================
 
+function sampleForTeamByVenue(matches, teamName, beforeDate, venue) {
+  const target = String(teamName || "").trim().toLowerCase();
+
+  return matches
+    .filter(match => {
+      const date = match.match_date || match.date;
+      const home = String(match.home_team || "").trim().toLowerCase();
+      const away = String(match.away_team || "").trim().toLowerCase();
+      const homeGoals = getNumber(match.home_goals);
+      const awayGoals = getNumber(match.away_goals);
+
+      if (
+        !date ||
+        new Date(date) >= new Date(beforeDate) ||
+        homeGoals === null ||
+        awayGoals === null
+      ) return false;
+
+      if (venue === "home") return home === target;
+      if (venue === "away") return away === target;
+
+      return false;
+    })
+    .sort((a, b) =>
+      new Date(b.match_date || b.date) -
+      new Date(a.match_date || a.date)
+    )
+    .slice(0, 5)
+    .map(match => {
+      const isHome =
+        String(match.home_team || "").trim().toLowerCase() === target;
+
+      return {
+        scored: Number(isHome ? match.home_goals : match.away_goals),
+        conceded: Number(isHome ? match.away_goals : match.home_goals)
+      };
+    });
+}
+
 function calculatePrediction(fixture, history) {
-  const homeName =
-    fixture.home_team || getHomeName(fixture);
-
-  const awayName =
-    fixture.away_team || getAwayName(fixture);
-
-  const fixtureDate =
-    fixture.match_date ||
-    fixture.date ||
-    fixture.datetime;
+  const homeName = fixture.home_team || getHomeName(fixture);
+  const awayName = fixture.away_team || getAwayName(fixture);
+  const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
 
   if (!fixtureDate || !homeName || !awayName) {
     return {
@@ -665,22 +697,20 @@ function calculatePrediction(fixture, history) {
     };
   }
 
-  const homeSample = sampleForTeamByName(
-    history,
-    homeName,
-    fixtureDate
+  // Ultime 10 partite precedenti alla partita da prevedere.
+  const homeSample = sampleForTeamByName(history, homeName, fixtureDate);
+  const awaySample = sampleForTeamByName(history, awayName, fixtureDate);
+
+  // Ultime 5 partite giocate in casa e in trasferta.
+  const homeVenueSample = sampleForTeamByVenue(
+    history, homeName, fixtureDate, "home"
   );
 
-  const awaySample = sampleForTeamByName(
-    history,
-    awayName,
-    fixtureDate
+  const awayVenueSample = sampleForTeamByVenue(
+    history, awayName, fixtureDate, "away"
   );
 
-  if (
-    homeSample.length < 5 ||
-    awaySample.length < 5
-  ) {
+  if (homeSample.length < 5 || awaySample.length < 5) {
     return {
       ok: false,
       error: "Dati insufficienti: servono almeno 5 risultati precedenti per entrambe le squadre.",
@@ -691,49 +721,101 @@ function calculatePrediction(fixture, history) {
     };
   }
 
-  const homeFor = weightedAverage(
-    homeSample,
-    "scored"
-  );
+  // Media delle ultime partite del campionato, senza risultati futuri.
+  const priorMatches = history
+    .filter(match => {
+      const date = match.match_date || match.date;
 
-  const homeAgainst = weightedAverage(
-    homeSample,
-    "conceded"
-  );
+      return (
+        date &&
+        new Date(date) < new Date(fixtureDate) &&
+        getNumber(match.home_goals) !== null &&
+        getNumber(match.away_goals) !== null
+      );
+    })
+    .sort((a, b) =>
+      new Date(a.match_date || a.date) -
+      new Date(b.match_date || b.date)
+    );
 
-  const awayFor = weightedAverage(
-    awaySample,
-    "scored"
-  );
+  const leagueSample = priorMatches.slice(-300);
 
-  const awayAgainst = weightedAverage(
-    awaySample,
-    "conceded"
-  );
+  const leagueHomeAverage = leagueSample.length
+    ? leagueSample.reduce(
+        (sum, match) => sum + Number(match.home_goals), 0
+      ) / leagueSample.length
+    : 1.35;
 
+  const leagueAwayAverage = leagueSample.length
+    ? leagueSample.reduce(
+        (sum, match) => sum + Number(match.away_goals), 0
+      ) / leagueSample.length
+    : 1.10;
+
+  // Medie ponderate della forma generale.
+  const homeFor = weightedAverage(homeSample, "scored");
+  const homeAgainst = weightedAverage(homeSample, "conceded");
+  const awayFor = weightedAverage(awaySample, "scored");
+  const awayAgainst = weightedAverage(awaySample, "conceded");
+
+  const overallHomeLambda = (homeFor + awayAgainst) / 2;
+  const overallAwayLambda = (awayFor + homeAgainst) / 2;
+
+  // Medie specifiche casa e trasferta.
+  const homeVenueReady = homeVenueSample.length >= 3;
+  const awayVenueReady = awayVenueSample.length >= 3;
+
+  const homeVenueFor = homeVenueReady
+    ? weightedAverage(homeVenueSample, "scored")
+    : homeFor;
+
+  const homeVenueAgainst = homeVenueReady
+    ? weightedAverage(homeVenueSample, "conceded")
+    : homeAgainst;
+
+  const awayVenueFor = awayVenueReady
+    ? weightedAverage(awayVenueSample, "scored")
+    : awayFor;
+
+  const awayVenueAgainst = awayVenueReady
+    ? weightedAverage(awayVenueSample, "conceded")
+    : awayAgainst;
+
+  const safeHomeLeague = Math.max(0.4, leagueHomeAverage);
+  const safeAwayLeague = Math.max(0.4, leagueAwayAverage);
+
+  const venueHomeLambda =
+    safeHomeLeague *
+    (homeVenueFor / safeHomeLeague) *
+    (awayVenueAgainst / safeHomeLeague);
+
+  const venueAwayLambda =
+    safeAwayLeague *
+    (awayVenueFor / safeAwayLeague) *
+    (homeVenueAgainst / safeHomeLeague);
+
+  // 40% forma generale e 60% rendimento casa/trasferta.
   const homeLambda = Math.max(
     0.10,
-    Math.min(5, (homeFor + awayAgainst) / 2)
+    Math.min(5,
+      0.4 * overallHomeLambda + 0.6 * venueHomeLambda
+    )
   );
 
   const awayLambda = Math.max(
     0.10,
-    Math.min(5, (awayFor + homeAgainst) / 2)
+    Math.min(5,
+      0.4 * overallAwayLambda + 0.6 * venueAwayLambda
+    )
   );
 
-  const matrix = buildGoalModel(
-    homeLambda,
-    awayLambda
-  );
+  // Matrice delle probabilità Poisson.
+  const matrix = buildGoalModel(homeLambda, awayLambda);
 
   const sum = fn =>
     matrix
       .filter(fn)
-      .reduce(
-        (total, item) =>
-          total + item.probability,
-        0
-      );
+      .reduce((total, item) => total + item.probability, 0);
 
   const homeWin = sum(x => x.home > x.away);
   const draw = sum(x => x.home === x.away);
@@ -772,21 +854,19 @@ function calculatePrediction(fixture, history) {
     btts_no: percent(1 - bttsYes)
   };
 
+  // Affidabilità indicativa dei mercati.
   const reliability = {};
 
-  for (const [market, probability] of Object.entries(
-    probabilities
-  )) {
+  for (const [market, probability] of Object.entries(probabilities)) {
     reliability[market] = getReliability(
       probability,
       sampleSize
     );
   }
 
+  // I cinque risultati esatti con probabilità più alta.
   const exactScores = [...matrix]
-    .sort((a, b) =>
-      b.probability - a.probability
-    )
+    .sort((a, b) => b.probability - a.probability)
     .slice(0, 5)
     .map(item => ({
       score: `${item.home}-${item.away}`,
@@ -796,15 +876,12 @@ function calculatePrediction(fixture, history) {
   return {
     ok: true,
 
-    model:
-      "Poisson con medie ponderate delle ultime 10 partite (peso 0,75)",
+    model: "Poisson avanzato: forma recente, rendimento casa/trasferta e media campionato",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
       away: Number(awayLambda.toFixed(2)),
-      total: Number(
-        (homeLambda + awayLambda).toFixed(2)
-      )
+      total: Number((homeLambda + awayLambda).toFixed(2))
     },
 
     probabilities,
@@ -812,7 +889,16 @@ function calculatePrediction(fixture, history) {
 
     samples: {
       home: homeSample.length,
-      away: awaySample.length
+      away: awaySample.length,
+      home_at_home: homeVenueSample.length,
+      away_away: awayVenueSample.length,
+      league_matches: leagueSample.length
+    },
+
+    model_inputs: {
+      league_home_goals_average: Number(leagueHomeAverage.toFixed(2)),
+      league_away_goals_average: Number(leagueAwayAverage.toFixed(2)),
+      venue_split_used: homeVenueReady && awayVenueReady
     },
 
     exact_scores: exactScores
