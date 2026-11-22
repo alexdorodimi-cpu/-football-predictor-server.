@@ -114,10 +114,11 @@ app.get("/api/status", (req, res) => {
     ok: true,
     server: "Football Predictor AI",
     provider: "SportAPI",
-    database: supabase ? "Supabase configurato" : "Non configurato"
+    database: "Supabase configurato",
+    sportapiKeyConfigured: Boolean(process.env.SPORTAPI_KEY),
+    accessTokenConfigured: Boolean(process.env.PREDICTOR_ACCESS_TOKEN)
   });
 });
-
 // TEST SPORTAPI
 app.get("/api/test-sportapi", requireAccess, async (req, res) => {
   try {
