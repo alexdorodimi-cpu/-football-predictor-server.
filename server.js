@@ -2630,7 +2630,7 @@ function parseSisalOddsPdfText(text) {
   const finishEvent = () => {
     if (!currentEvent) return;
     const combined = currentEvent.parts.join(" ").replace(/\s+/g, " ").trim();
-    const firstOdd = combined.search(/(?<![A-Za-z])\d{1,3},\d{2}(?!\d)/);
+    const firstOdd = combined.search(/\d{1,3},\d{2}(?!\d)/);
     if (firstOdd < 0) {
       rejectedRows++;
       currentEvent = null;
