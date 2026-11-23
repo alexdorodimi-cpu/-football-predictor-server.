@@ -111,7 +111,7 @@ function requireDatabase(req, res, next) {
 
 // Protezione di tutte le API tranne status
 app.use("/api", (req, res, next) => {
-  if (req.path === "/status") {
+  if (req.path === "/status" || req.path === "/auth-diagnostic") {
     return next();
   }
 
@@ -1266,6 +1266,21 @@ function calculatePrediction(fixture, history) {
 // ==========================================
 // STATUS SERVER E CAMPIONATI
 // ==========================================
+
+app.get("/api/auth-diagnostic", (req, res) => {
+  const authorization = req.get("authorization") || "";
+  const hasBearer = authorization.startsWith("Bearer ");
+  const supplied = hasBearer ? authorization.slice(7).trim() : "";
+
+  res.json({
+    ok: true,
+    diagnostic: "auth-header-check",
+    serverTokenConfigured: Boolean(ACCESS_TOKEN),
+    authorizationHeaderReceived: Boolean(authorization),
+    bearerFormatReceived: hasBearer,
+    tokenMatchesServer: Boolean(supplied && ACCESS_TOKEN && supplied === ACCESS_TOKEN)
+  });
+});
 
 app.get("/api/status", async (req, res) => {
   let leagues = [];
