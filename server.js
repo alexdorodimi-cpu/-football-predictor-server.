@@ -930,7 +930,7 @@ function sampleForTeamByVenue(matches, teamName, beforeDate, venue) {
     });
 }
 
-function calculatePrediction(fixture, history) {
+function calculatePrediction(fixture, history, lineupImpact = null) {
   const homeName = fixture.home_team || getHomeName(fixture);
   const awayName = fixture.away_team || getAwayName(fixture);
   const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
@@ -1048,12 +1048,18 @@ function calculatePrediction(fixture, history) {
     safeAwayLeague * (awayVenueFor / safeAwayLeague) * (homeVenueAgainst / safeHomeLeague);
 
   // 30% forza generale + 70% rendimento casa/trasferta.
-  const homeLambda = Math.max(0.10, Math.min(4.5,
+  let homeLambda = Math.max(0.10, Math.min(4.5,
     0.3 * overallHomeLambda + 0.7 * venueHomeLambda
   ));
-  const awayLambda = Math.max(0.10, Math.min(4.5,
+  let awayLambda = Math.max(0.10, Math.min(4.5,
     0.3 * overallAwayLambda + 0.7 * venueAwayLambda
   ));
+  if (lineupImpact?.applied) {
+    homeLambda *= lineupImpact.home_attack_factor / lineupImpact.away_defence_factor;
+    awayLambda *= lineupImpact.away_attack_factor / lineupImpact.home_defence_factor;
+    homeLambda = Math.max(0.10, Math.min(4.5, homeLambda));
+    awayLambda = Math.max(0.10, Math.min(4.5, awayLambda));
+  }
 
   // Matrice delle probabilità Poisson.
   const matrix = buildGoalModel(homeLambda, awayLambda);
@@ -1124,7 +1130,9 @@ function calculatePrediction(fixture, history) {
   return {
     ok: true,
 
-    model: "Poisson ponderato con shrinkage bayesiano e rendimento casa/trasferta",
+    model: lineupImpact?.applied
+      ? "Poisson ponderato con shrinkage bayesiano, rendimento casa/trasferta e forma titolari (sperimentale)"
+      : "Poisson ponderato con shrinkage bayesiano e rendimento casa/trasferta",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
@@ -1147,7 +1155,8 @@ function calculatePrediction(fixture, history) {
     model_inputs: {
       league_home_goals_average: Number(leagueHomeAverage.toFixed(2)),
       league_away_goals_average: Number(leagueAwayAverage.toFixed(2)),
-      venue_split_used: homeVenueReady && awayVenueReady
+      venue_split_used: homeVenueReady && awayVenueReady,
+      lineup_form_adjustment: lineupImpact || { applied: false, reason: "Non disponibile" }
     },
 
     exact_scores: exactScores
@@ -1718,6 +1727,89 @@ function readPlayerStats(groups) {
   return result;
 }
 
+function classifyPlayerPosition(player) {
+  const raw = [
+    player?.position,
+    player?.position_name,
+    player?.positionName,
+    player?.role,
+    player?.position?.name
+  ].filter(value => typeof value === "string").join(" ").toLowerCase();
+  if (/goalkeeper|keeper|portiere|\bgk\b/.test(raw)) return "goalkeeper";
+  if (/defender|defence|defense|difensore|\b(cb|lb|rb|lwb|rwb)\b/.test(raw)) return "defender";
+  if (/forward|attacker|striker|winger|attaccante|\b(st|cf|lw|rw)\b/.test(raw)) return "attacker";
+  if (/midfield|centrocampista|\b(dm|cm|am)\b/.test(raw)) return "midfielder";
+  return "unknown";
+}
+
+function calculateLineupFormImpact(playerForm) {
+  const result = {
+    applied: false,
+    reason: "Servono due formazioni confermate e dati recenti sufficienti per i titolari.",
+    home_attack_rating: null,
+    away_attack_rating: null,
+    home_goalkeeper_rating: null,
+    away_goalkeeper_rating: null,
+    home_defensive_rating: null,
+    away_defensive_rating: null,
+    home_attack_factor: 1,
+    away_attack_factor: 1,
+    home_defence_factor: 1,
+    away_defence_factor: 1
+  };
+  if (!playerForm?.lineup_confirmed) return result;
+
+  const summarize = players => {
+    const usable = (players || []).filter(player =>
+      player.appearances >= 3 &&
+      Number.isFinite(getNumber(player.average_per_appearance?.rating))
+    );
+    const groups = { attack: [], defence: [], goalkeeper: [] };
+    for (const player of usable) {
+      const rating = getNumber(player.average_per_appearance.rating);
+      const role = player.position_group || "unknown";
+      if (role === "attacker" || role === "midfielder") groups.attack.push(rating);
+      if (role === "defender" || role === "goalkeeper") groups.defence.push(rating);
+      if (role === "goalkeeper") groups.goalkeeper.push(rating);
+    }
+    const avg = values => values.length >= 2
+      ? values.reduce((sum, value) => sum + value, 0) / values.length
+      : null;
+    return {
+      attack: avg(groups.attack),
+      defence: avg(groups.defence),
+      goalkeeper: avg(groups.goalkeeper),
+      coverage: usable.length
+    };
+  };
+  const home = summarize(playerForm.players?.home);
+  const away = summarize(playerForm.players?.away);
+  const allHaveRoleData = home.attack !== null && away.attack !== null &&
+    home.defence !== null && away.defence !== null &&
+    home.goalkeeper !== null && away.goalkeeper !== null;
+  if (!allHaveRoleData) {
+    result.reason = "Ruoli o valutazioni recenti insufficienti: Poisson lasciato invariato.";
+    return result;
+  }
+  // Rating recenti verso il riferimento neutro 6.70; effetto massimo ±3%.
+  const factor = rating => Math.max(0.97, Math.min(1.03,
+    1 + ((rating - 6.70) * 0.015)
+  ));
+  result.home_attack_rating = Number(home.attack.toFixed(3));
+  result.away_attack_rating = Number(away.attack.toFixed(3));
+  result.home_defensive_rating = Number(home.defence.toFixed(3));
+  result.away_defensive_rating = Number(away.defence.toFixed(3));
+  result.home_goalkeeper_rating = Number(home.goalkeeper.toFixed(3));
+  result.away_goalkeeper_rating = Number(away.goalkeeper.toFixed(3));
+  result.home_attack_factor = factor(home.attack);
+  result.away_attack_factor = factor(away.attack);
+  result.home_defence_factor = factor((home.defence + home.goalkeeper) / 2);
+  result.away_defence_factor = factor((away.defence + away.goalkeeper) / 2);
+  result.applied = true;
+  result.reason = "Correzione sperimentale basata sui rating recenti dei titolari, limitata a ±3%.";
+  return result;
+}
+
 function extractLineupData(body) {
   return body?.data || body?.response?.data || body?.response || body;
 }
@@ -1736,7 +1828,7 @@ async function getFixturePlayerForm(fixture, history) {
     lineup_confirmed: Boolean(sides.every(side => side.lineup?.confirmed === true)),
     lineup: {},
     players: { home: [], away: [] },
-    methodology: "Ultime presenze individuali ricostruite dalle statistiche partita PitchAPI; nessuna correzione applicata alle lambda Poisson."
+    methodology: "Ultime presenze individuali ricostruite dalle statistiche partita PitchAPI; la correzione Poisson e\u0300 applicata solo con formazioni confermate e copertura sufficiente."
   };
 
   for (const side of sides) {
@@ -1830,6 +1922,8 @@ async function getFixturePlayerForm(fixture, history) {
         team: side.teamName,
         player_id: id || null,
         name: player.name || null,
+        position: player.position?.name || player.position_name || player.position || null,
+        position_group: classifyPlayerPosition(player),
         shirt_number: player.shirt_number || null,
         appearances: appearances.length,
         minutes_total: appearances.reduce((sum, item) => sum + item.minutes, 0),
@@ -1899,10 +1993,12 @@ app.get(
         fixture.season
       );
 
-      const prediction = calculatePrediction(
-        fixture,
-        history
-      );
+      const playerForm = await getFixturePlayerForm(fixture, history).catch(error => {
+        console.error("Player form non disponibile:", error.message);
+        return null;
+      });
+      const lineupImpact = calculateLineupFormImpact(playerForm);
+      const prediction = calculatePrediction(fixture, history, lineupImpact);
 
       const statsMonteCarlo = await runStatsMonteCarlo(fixture, history);
 
@@ -1917,6 +2013,8 @@ app.get(
       res.json({
         ok: true,
         model: prediction.model,
+        lineup_form_impact: lineupImpact,
+        player_form: playerForm ? { lineup_confirmed: playerForm.lineup_confirmed, lineup: playerForm.lineup, players: playerForm.players } : null,
 
         match: {
           id: fixture.id,
