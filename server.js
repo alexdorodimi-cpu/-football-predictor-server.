@@ -2,6 +2,7 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 const path = require("path");
+const pdfParse = require("pdf-parse");
 
 const app = express();
 
@@ -2541,6 +2542,163 @@ app.get(
     }
   }
 );
+
+// ==========================================
+// IMPORTATORE FOGLIO QUOTE SISAL (PDF UFFICIALE)
+// ==========================================
+
+const SISAL_BASE_PDF_URL =
+  "https://landing.sisal.it/volantini/Scommesse_Sport/Quote/calcio%20base%20per%20data.pdf";
+
+const SISAL_ODDS_COLUMNS = [
+  "1", "X", "2",
+  "handicap_1", "handicap_X", "handicap_2",
+  "double_chance_1X", "double_chance_X2", "double_chance_12",
+  "under_1_5", "over_1_5",
+  "under_2_5", "over_2_5",
+  "under_3_5", "over_3_5",
+  "goal", "no_goal",
+  "home_scores_yes", "home_scores_no",
+  "away_scores_yes", "away_scores_no"
+];
+
+function parseSisalOddsPdfText(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const updatedMatch = String(text || "").match(
+    /Dati aggiornati al\s+(\d{2})\/(\d{2})\/(\d{4})\s*-\s*ore\s*(\d{2}:\d{2}:\d{2})/i
+  );
+  const updatedAt = updatedMatch
+    ? `${updatedMatch[3]}-${updatedMatch[2]}-${updatedMatch[1]}T${updatedMatch[4]}+01:00`
+    : null;
+
+  const monthNames = {
+    gennaio: "01", febbraio: "02", marzo: "03", aprile: "04",
+    maggio: "05", giugno: "06", luglio: "07", agosto: "08",
+    settembre: "09", ottobre: "10", novembre: "11", dicembre: "12"
+  };
+  const weekdays = "lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica";
+  let currentDateLabel = null;
+  const events = [];
+  let candidateLines = 0;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+/g, " ").trim();
+    if (!line) continue;
+
+    const dateHeading = line.match(
+      new RegExp(`^(?:${weekdays})[,]?\\s+(\\d{1,2})\\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\\b`, "i")
+    );
+    if (dateHeading) {
+      currentDateLabel = `${dateHeading[1].padStart(2, "0")}/${monthNames[dateHeading[2].toLowerCase()]}`;
+      continue;
+    }
+
+    const prefix = line.match(/^(\d{1,2}\.\d{2})\s+([A-Z0-9]{2,8})\s+(\d{3,6})\s+(\d{2,7})\s+(.+)$/i);
+    if (!prefix) continue;
+    candidateLines++;
+
+    const rest = prefix[5].split(" ");
+    if (rest.length < SISAL_ODDS_COLUMNS.length + 3) continue;
+
+    const oddsTokens = rest.slice(-SISAL_ODDS_COLUMNS.length);
+    const odds = oddsTokens.map(token => {
+      if (token === "-") return null;
+      if (!/^\d+(?:,\d+)?$/.test(token)) return undefined;
+      const value = Number(token.replace(",", "."));
+      return Number.isFinite(value) && value > 1 && value <= 1000 ? value : undefined;
+    });
+    if (odds.some(value => value === undefined)) continue;
+
+    const beforeOdds = rest.slice(0, -SISAL_ODDS_COLUMNS.length);
+    const liveIndex = beforeOdds.lastIndexOf("L");
+    if (liveIndex < 2) continue;
+    const teams = beforeOdds.slice(0, liveIndex).join(" ").trim();
+    const teamParts = teams.match(/^(.+?)\s+(.+)$/);
+    if (!teamParts) continue;
+
+    const markets = {};
+    SISAL_ODDS_COLUMNS.forEach((key, index) => {
+      markets[key] = odds[index];
+    });
+
+    events.push({
+      date_label: currentDateLabel,
+      time: prefix[1],
+      competition_code: prefix[2],
+      schedule_id: prefix[3],
+      event_id: prefix[4],
+      home_team: teamParts[1].trim(),
+      away_team: teamParts[2].trim(),
+      markets
+    });
+  }
+
+  return {
+    updated_at: updatedAt,
+    events,
+    diagnostics: {
+      text_lines: lines.length,
+      candidate_event_lines: candidateLines,
+      parsed_events: events.length
+    }
+  };
+}
+
+app.get("/api/sisal/odds", async (req, res) => {
+  try {
+    const response = await fetch(SISAL_BASE_PDF_URL, {
+      headers: { "User-Agent": "FootballPredictorAI/1.0", "Accept": "application/pdf" },
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!response.ok) {
+      return res.status(502).json({
+        ok: false, available: false,
+        error: `Foglio Sisal non raggiungibile (HTTP ${response.status}).`
+      });
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!contentType.toLowerCase().includes("pdf") || buffer.length < 1000 || buffer.length > 15 * 1024 * 1024) {
+      return res.status(502).json({
+        ok: false, available: false,
+        error: "La risposta Sisal non è un PDF valido o supera il limite di dimensione."
+      });
+    }
+
+    const parsedPdf = await pdfParse(buffer);
+    const parsed = parseSisalOddsPdfText(parsedPdf.text || "");
+    const updatedTime = parsed.updated_at ? Date.parse(parsed.updated_at) : NaN;
+    const ageMinutes = Number.isFinite(updatedTime)
+      ? Math.max(0, Math.round((Date.now() - updatedTime) / 60000))
+      : null;
+    const stale = ageMinutes === null || ageMinutes > 180;
+
+    res.json({
+      ok: true,
+      provider: "Sisal",
+      source: SISAL_BASE_PDF_URL,
+      source_type: "official_public_pdf",
+      available: parsed.events.length > 0 && !stale,
+      updated_at: parsed.updated_at,
+      age_minutes: ageMinutes,
+      stale,
+      stale_after_minutes: 180,
+      events_count: parsed.events.length,
+      events: parsed.events,
+      diagnostics: parsed.diagnostics,
+      note: "Importazione di verifica: le quote non vengono ancora usate dal generatore multiple. Controllare gli abbinamenti squadra/data prima dell'integrazione."
+    });
+  } catch (error) {
+    console.error("Importazione quote Sisal:", error.message);
+    res.status(502).json({
+      ok: false,
+      available: false,
+      error: "Impossibile scaricare o leggere il PDF ufficiale Sisal.",
+      detail: error.message
+    });
+  }
+});
 
 // ==========================================
 // QUOTE
