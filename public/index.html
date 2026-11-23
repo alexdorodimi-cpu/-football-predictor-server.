@@ -603,6 +603,28 @@ function renderPrediction(prediction,predictionError){
   html+='<div class="predictionError">Risultati esatti non disponibili.</div>';
  }
 
+
+ const statsMonteCarlo=prediction.stats_monte_carlo||null;
+ const statsMarkets=statsMonteCarlo?.markets||{};
+ html+=`
+ <div class="sectionTitle">MONTE CARLO · CORNER, TIRI E CARTELLINI</div>
+ <div class="help-note">
+  <strong>${escapeHtml(statsMonteCarlo?.iterations??0)} simulazioni per mercato</strong><br>
+  ${escapeHtml(statsMonteCarlo?.method||"Statistiche storiche non disponibili")}.
+ </div>`;
+ Object.values(statsMarkets).forEach(market=>{
+  html+=`<div class="modelInfo"><strong>${escapeHtml(market.label||"Statistica")}</strong><br>`;
+  if(!market.available){
+   html+=`<span class="predictionError">${escapeHtml(market.reason||"Campione insufficiente")}</span><br>`;
+  }else{
+   html+=`Media simulata: casa ${escapeHtml(market.expected.home)} · ospite ${escapeHtml(market.expected.away)} · totale ${escapeHtml(market.expected.total)}<br>`;
+   Object.entries(market.over_probabilities||{}).forEach(([line,value])=>{
+    html+=`Over ${escapeHtml(line)}: <strong>${formatPercent(value)}</strong> · Under: <strong>${formatPercent(100-value)}</strong><br>`;
+   });
+  }
+  html+=`Campioni reali: casa ${escapeHtml(market.samples?.home??0)} · ospite ${escapeHtml(market.samples?.away??0)}</div>`;
+ });
+
  const monteCarlo=prediction.monte_carlo||null;
  const mcProbabilities=monteCarlo?.probabilities||{};
  html+=`
