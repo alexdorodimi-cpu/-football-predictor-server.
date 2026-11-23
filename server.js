@@ -2516,7 +2516,14 @@ app.get(
         red_cards: [],
         fouls: [],
         expected_goals: [],
-        possession: []
+        possession: [],
+        shots_off_target: [],
+        blocked_shots: [],
+        offsides: [],
+        saves: [],
+        passes: [],
+        accurate_passes: [],
+        tackles: []
       };
 
       let statsMatchesAnalyzed = 0;
@@ -2530,7 +2537,14 @@ app.get(
         red_cards: "red_cards",
         fouls: "fouls",
         expected_goals: "expected_goals",
-        possession: "BallPossesion"
+        possession: "BallPossesion",
+        shots_off_target: "ShotsOffTarget",
+        blocked_shots: "BlockedShots",
+        offsides: "Offsides",
+        saves: "Saves",
+        passes: "Passes",
+        accurate_passes: "AccuratePasses",
+        tackles: "Tackles"
       };
 
       for (const match of matches) {
@@ -2636,7 +2650,14 @@ app.get(
         red_cards: calculateWeightedStat(statSamples.red_cards),
         fouls: calculateWeightedStat(statSamples.fouls),
         expected_goals: calculateWeightedStat(statSamples.expected_goals),
-        possession: calculateWeightedStat(statSamples.possession)
+        possession: calculateWeightedStat(statSamples.possession),
+        shots_off_target: calculateWeightedStat(statSamples.shots_off_target),
+        blocked_shots: calculateWeightedStat(statSamples.blocked_shots),
+        offsides: calculateWeightedStat(statSamples.offsides),
+        saves: calculateWeightedStat(statSamples.saves),
+        passes: calculateWeightedStat(statSamples.passes),
+        accurate_passes: calculateWeightedStat(statSamples.accurate_passes),
+        tackles: calculateWeightedStat(statSamples.tackles)
       };
 
       const statsSampleCounts = Object.fromEntries(
