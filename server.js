@@ -1989,9 +1989,33 @@ app.get(
         });
       }
 
+      let statisticalForecast = null;
+      try {
+        statisticalForecast = await buildHistoricalStatForecast(fixture, history);
+        if (statisticalForecast?.probabilities) {
+          prediction.probabilities = {
+            ...prediction.probabilities,
+            ...statisticalForecast.probabilities
+          };
+        }
+      } catch (statsError) {
+        console.error("Modello statistiche avanzate non disponibile:", statsError.message);
+      }
+
       res.json({
         ok: true,
         model: prediction.model,
+        statistical_forecast: statisticalForecast,
+        data_coverage: statisticalForecast ? {
+          historical_matches_requested: statisticalForecast.matches_requested,
+          historical_matches_with_statistics: statisticalForecast.matches_with_stats,
+          available_stat_fields: Object.entries(statisticalForecast.samples || {})
+            .filter(([, counts]) => counts.home > 0 || counts.away > 0)
+            .map(([field]) => field),
+          missing_stat_fields: Object.entries(statisticalForecast.samples || {})
+            .filter(([, counts]) => counts.home === 0 && counts.away === 0)
+            .map(([field]) => field)
+        } : { available: false, reason: "Statistiche storiche non recuperabili in questa richiesta." },
         lineup_form_impact: lineupImpact,
         player_form: playerForm ? { lineup_confirmed: playerForm.lineup_confirmed, lineup: playerForm.lineup, players: playerForm.players } : null,
 
