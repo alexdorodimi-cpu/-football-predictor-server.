@@ -129,7 +129,7 @@ const HISTORICAL_STATS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const HISTORICAL_STATS_CACHE_MAX = 500;
 
 function historicalStatsCacheKey(endpoint) {
-  const match = String(endpoint || "").match(/^\\/matches\\/([^/?]+)\\/stats(?:\\?|$)/);
+  const match = String(endpoint || "").match(/^\/matches\/([^/?]+)\/stats(?:\?|$)/);
   return match ? `match-stats:${decodeURIComponent(match[1])}` : null;
 }
 
