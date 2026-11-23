@@ -1665,13 +1665,45 @@ app.get(
         });
       }
 
-      const { data, error } = await supabase
+      const leagueId = req.query.league
+        ? String(req.query.league).trim()
+        : null;
+
+      const season = req.query.season
+        ? String(req.query.season).trim()
+        : null;
+
+      if (leagueId && !validNumericId(leagueId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID campionato non valido."
+        });
+      }
+
+      if (season && !/^\\d{4}\\/\\d{4}$/.test(season)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Stagione non valida. Usa il formato YYYY/YYYY."
+        });
+      }
+
+      let matchesQuery = supabase
         .from("matches")
         .select("*")
         .not("home_goals", "is", null)
         .not("away_goals", "is", null)
         .order("match_date", { ascending: false })
         .limit(5000);
+
+      if (leagueId) {
+        matchesQuery = matchesQuery.eq("league_id", leagueId);
+      }
+
+      if (season) {
+        matchesQuery = matchesQuery.eq("season", season);
+      }
+
+      const { data, error } = await matchesQuery;
 
       if (error) throw error;
 
