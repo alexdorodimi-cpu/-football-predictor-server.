@@ -2624,6 +2624,7 @@ function parseSisalOddsPdfText(text) {
   let candidateLines = 0;
   let rejectedRows = 0;
   const sampleLines = [];
+  const previewLines = lines.map(line => String(line).replace(/\\s+/g, " ").trim()).filter(Boolean).slice(0, 20);
   for (const rawLine of lines) {
     const line = String(rawLine).replace(/\s+/g, " ").trim();
     if (!line) continue;
@@ -2657,7 +2658,8 @@ function parseSisalOddsPdfText(text) {
   }
   return { updated_at: updatedAt, events, diagnostics: {
     text_lines: lines.length, candidate_event_lines: candidateLines,
-    parsed_events: events.length, rejected_candidate_lines: rejectedRows, sample_lines: sampleLines
+    parsed_events: events.length, rejected_candidate_lines: rejectedRows,
+    sample_lines: sampleLines, preview_lines: previewLines
   } };
 }
 
