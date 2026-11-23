@@ -595,6 +595,103 @@ function runMonteCarlo(matrix, iterations = 10000) {
   };
 }
 
+
+function bootstrapWeightedAverage(sample, key) {
+  if (!sample.length) return 0;
+  const resampled = Array.from(
+    { length: sample.length },
+    () => sample[Math.floor(Math.random() * sample.length)]
+  );
+  return weightedAverage(resampled, key);
+}
+
+function randomPoisson(lambda) {
+  const limit = Math.exp(-Math.max(0.01, lambda));
+  let product = 1;
+  let count = 0;
+  do {
+    count++;
+    product *= Math.random();
+  } while (product > limit);
+  return count - 1;
+}
+
+// Modello ibrido: bootstrap delle statistiche recenti + simulazione dei gol.
+// Le lambda avanzate Poisson restano il centro; il bootstrap misura
+// l'incertezza dovuta al campione limitato delle ultime partite.
+function runHybridMonteCarlo(
+  homeSample,
+  awaySample,
+  homeLambda,
+  awayLambda,
+  baselineHomeFor,
+  baselineHomeAgainst,
+  baselineAwayFor,
+  baselineAwayAgainst,
+  iterations = 20000
+) {
+  const counts = {
+    "1": 0, "X": 0, "2": 0,
+    over_1_5: 0, under_1_5: 0,
+    over_2_5: 0, under_2_5: 0,
+    over_3_5: 0, under_3_5: 0,
+    btts_yes: 0, btts_no: 0
+  };
+  const scores = new Map();
+
+  const baseHome = Math.max(0.1, baselineHomeFor + baselineAwayAgainst);
+  const baseAway = Math.max(0.1, baselineAwayFor + baselineHomeAgainst);
+
+  for (let i = 0; i < iterations; i++) {
+    const sampledHomeFor = bootstrapWeightedAverage(homeSample, "scored");
+    const sampledHomeAgainst = bootstrapWeightedAverage(homeSample, "conceded");
+    const sampledAwayFor = bootstrapWeightedAverage(awaySample, "scored");
+    const sampledAwayAgainst = bootstrapWeightedAverage(awaySample, "conceded");
+
+    const homeFactor = Math.max(0.35, Math.min(2.5,
+      (sampledHomeFor + sampledAwayAgainst) / baseHome
+    ));
+    const awayFactor = Math.max(0.35, Math.min(2.5,
+      (sampledAwayFor + sampledHomeAgainst) / baseAway
+    ));
+    const simulatedHomeLambda = Math.max(0.1, Math.min(5, homeLambda * homeFactor));
+    const simulatedAwayLambda = Math.max(0.1, Math.min(5, awayLambda * awayFactor));
+
+    const home = randomPoisson(simulatedHomeLambda);
+    const away = randomPoisson(simulatedAwayLambda);
+    const total = home + away;
+    const score = `${home}-${away}`;
+
+    if (home > away) counts["1"]++;
+    else if (home === away) counts.X++;
+    else counts["2"]++;
+
+    if (total >= 2) counts.over_1_5++; else counts.under_1_5++;
+    if (total >= 3) counts.over_2_5++; else counts.under_2_5++;
+    if (total >= 4) counts.over_3_5++; else counts.under_3_5++;
+    if (home > 0 && away > 0) counts.btts_yes++; else counts.btts_no++;
+    scores.set(score, (scores.get(score) || 0) + 1);
+  }
+
+  const probabilities = Object.fromEntries(
+    Object.entries(counts).map(([key, value]) => [key, percent(value / iterations)])
+  );
+  const topExactScores = [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([score, count]) => ({
+      score,
+      probability: percent(count / iterations)
+    }));
+
+  return {
+    iterations,
+    method: "Bootstrap delle ultime 10 partite + simulazione Poisson dei gol",
+    probabilities,
+    top_exact_scores: topExactScores
+  };
+}
+
 function percent(value) {
   return Number((value * 100).toFixed(1));
 }
@@ -1062,23 +1159,32 @@ function calculatePrediction(fixture, history) {
     awaySample.length
   );
 
-  const probabilities = {
+  const poissonProbabilities = {
     "1": percent(homeWin),
     "X": percent(draw),
     "2": percent(awayWin),
-
     over_1_5: percent(over(1)),
     under_1_5: percent(under(1)),
-
     over_2_5: percent(over(2)),
     under_2_5: percent(under(2)),
-
     over_3_5: percent(over(3)),
     under_3_5: percent(under(3)),
-
     btts_yes: percent(bttsYes),
     btts_no: percent(1 - bttsYes)
   };
+
+  const hybridMonteCarlo = runHybridMonteCarlo(
+    homeSample,
+    awaySample,
+    homeLambda,
+    awayLambda,
+    homeFor,
+    homeAgainst,
+    awayFor,
+    awayAgainst,
+    20000
+  );
+  const probabilities = hybridMonteCarlo.probabilities;
 
   // Affidabilità indicativa dei mercati.
   const reliability = {};
@@ -1091,18 +1197,19 @@ function calculatePrediction(fixture, history) {
   }
 
   // I cinque risultati esatti con probabilità più alta.
-  const exactScores = [...matrix]
+  const poissonExactScores = [...matrix]
     .sort((a, b) => b.probability - a.probability)
     .slice(0, 5)
     .map(item => ({
       score: `${item.home}-${item.away}`,
       probability: percent(item.probability)
     }));
+  const exactScores = poissonExactScores;
 
   return {
     ok: true,
 
-    model: "Poisson avanzato: forma recente, rendimento casa/trasferta e media campionato",
+    model: "Hybrid Poisson + Monte Carlo: forma recente, rendimento casa/trasferta e bootstrap statistico",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
@@ -1111,7 +1218,9 @@ function calculatePrediction(fixture, history) {
     },
 
     probabilities,
+    poisson_probabilities: poissonProbabilities,
     monte_carlo: monteCarlo,
+    hybrid_monte_carlo: hybridMonteCarlo,
     reliability,
 
     samples: {
