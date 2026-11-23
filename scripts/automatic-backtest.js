@@ -55,6 +55,67 @@ async function main() {
     };
   }
 
+  // Ottimizza le soglie decisionali solo sul blocco storico più vecchio;
+  // il blocco cronologicamente più recente resta holdout e non viene usato per scegliere soglie.
+  const binaryDefinitions = [
+    { name: "Over 1.5", probability: "over_1_5", actual: "over_1_5" },
+    { name: "Over 2.5", probability: "over_2_5", actual: "over_2_5" },
+    { name: "Over 3.5", probability: "over_3_5", actual: "over_3_5" },
+    { name: "BTTS", probability: "btts_yes", actual: "btts_yes" }
+  ];
+  const orderedResults = Array.isArray(data.results)
+    ? [...data.results].sort((a, b) => String(a.match_date || "").localeCompare(String(b.match_date || "")))
+    : [];
+  const splitAt = Math.floor(orderedResults.length * 0.70);
+  const training = orderedResults.slice(0, splitAt);
+  const holdout = orderedResults.slice(splitAt);
+  const thresholdOptimization = {};
+
+  for (const market of binaryDefinitions) {
+    const rows = list => list.filter(row =>
+      Number.isFinite(Number(row.probabilities?.[market.probability])) &&
+      typeof row.actual_markets?.[market.actual] === "boolean"
+    );
+    const trainRows = rows(training);
+    const testRows = rows(holdout);
+    let best = { threshold: 0.5, accuracy: -1, correct: 0, evaluated: trainRows.length };
+
+    // Griglia predefinita, nessun uso dei risultati holdout per scegliere la soglia.
+    for (let threshold = 0.30; threshold <= 0.70001; threshold += 0.01) {
+      let correct = 0;
+      for (const row of trainRows) {
+        const predicted = Number(row.probabilities[market.probability]) / 100 >= threshold;
+        if (predicted === row.actual_markets[market.actual]) correct++;
+      }
+      const accuracy = trainRows.length ? correct / trainRows.length : -1;
+      if (accuracy > best.accuracy + 1e-12 ||
+          (Math.abs(accuracy - best.accuracy) <= 1e-12 && Math.abs(threshold - 0.5) < Math.abs(best.threshold - 0.5))) {
+        best = { threshold: Number(threshold.toFixed(2)), accuracy, correct, evaluated: trainRows.length };
+      }
+    }
+
+    let holdoutCorrect = 0;
+    let baselineCorrect = 0;
+    for (const row of testRows) {
+      const probability = Number(row.probabilities[market.probability]) / 100;
+      if ((probability >= best.threshold) === row.actual_markets[market.actual]) holdoutCorrect++;
+      if ((probability >= 0.5) === row.actual_markets[market.actual]) baselineCorrect++;
+    }
+    const holdoutAccuracy = testRows.length ? Number((holdoutCorrect / testRows.length * 100).toFixed(2)) : null;
+    const baselineAccuracy = testRows.length ? Number((baselineCorrect / testRows.length * 100).toFixed(2)) : null;
+    thresholdOptimization[market.name] = {
+      selected_threshold_percent: Number((best.threshold * 100).toFixed(0)),
+      training_evaluated: trainRows.length,
+      training_accuracy: trainRows.length ? Number((best.accuracy * 100).toFixed(2)) : null,
+      holdout_evaluated: testRows.length,
+      holdout_accuracy: holdoutAccuracy,
+      holdout_baseline_50_percent_accuracy: baselineAccuracy,
+      holdout_meets_target: testRows.length >= Math.max(10, Math.floor(minimumEvaluated * 0.2)) && holdoutAccuracy !== null && holdoutAccuracy >= targetAccuracy,
+      applied_to_model: false,
+      note: "Soglia decisionale suggerita; modello Poisson invariato. Validare su nuovi dati prima dell'adozione."
+    };
+  }
+
   const allMarketsMeetTarget = Object.values(reportMarkets).every(m => m.meets_target);
   const report = {
     generated_at: new Date().toISOString(),
@@ -71,6 +132,8 @@ async function main() {
     all_markets_meet_target: allMarketsMeetTarget,
     status: allMarketsMeetTarget ? "TARGET_REACHED" : "CONTINUE_MONITORING",
     markets: reportMarkets,
+    threshold_optimization: thresholdOptimization,
+    optimization_split: { training_matches: training.length, untouched_holdout_matches: holdout.length, chronological: true },
     advanced_metrics: data.advanced_metrics || null
   };
 
