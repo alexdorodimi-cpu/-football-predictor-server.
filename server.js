@@ -1206,7 +1206,7 @@ function calculatePrediction(fixture, history) {
     awayAgainst,
     20000
   );
-  const probabilities = hybridMonteCarlo.probabilities;
+  // Poisson resta il modello principale; l’ibrido rimane sperimentale.\n  const probabilities = poissonProbabilities;
 
   // Affidabilità indicativa dei mercati.
   const reliability = {};
@@ -1226,12 +1226,12 @@ function calculatePrediction(fixture, history) {
       score: `${item.home}-${item.away}`,
       probability: percent(item.probability)
     }));
-  const exactScores = hybridMonteCarlo.top_exact_scores;
+  const exactScores = poissonExactScores;
 
   return {
     ok: true,
 
-    model: "Hybrid Poisson + Monte Carlo: forma recente, rendimento casa/trasferta e bootstrap statistico",
+    model: "Poisson ponderato con rendimento casa/trasferta (modello principale)",\n    experimental_model: "Hybrid Poisson + Monte Carlo con bootstrap statistico",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
@@ -2207,7 +2207,7 @@ app.get(
 
       const hybridMetrics = buildModelMetrics("probabilities");
       const poissonMetrics = buildModelMetrics("poisson_probabilities");
-      const accuracyByMarket = hybridMetrics;
+      const accuracyByMarket = poissonMetrics;
 
       res.json({
         ok: true,
