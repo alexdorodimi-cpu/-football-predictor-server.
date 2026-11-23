@@ -122,10 +122,45 @@ app.use("/api", (req, res, next) => {
 // PITCHAPI
 // ==========================================
 
+// Cache limitata per statistiche storiche: evita di richiamare PitchAPI
+// per le stesse partite durante previsioni e backtest ravvicinati.
+const historicalStatsCache = new Map();
+const HISTORICAL_STATS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const HISTORICAL_STATS_CACHE_MAX = 500;
+
+function historicalStatsCacheKey(endpoint) {
+  const match = String(endpoint || "").match(/^\\/matches\\/([^/?]+)\\/stats(?:\\?|$)/);
+  return match ? `match-stats:${decodeURIComponent(match[1])}` : null;
+}
+
+function getCachedHistoricalStats(key) {
+  if (!key) return null;
+  const entry = historicalStatsCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.savedAt > HISTORICAL_STATS_CACHE_TTL_MS) {
+    historicalStatsCache.delete(key);
+    return null;
+  }
+  return entry.body;
+}
+
+function cacheHistoricalStats(key, body) {
+  if (!key || !body || typeof body !== "object") return;
+  if (historicalStatsCache.size >= HISTORICAL_STATS_CACHE_MAX) {
+    const oldestKey = historicalStatsCache.keys().next().value;
+    if (oldestKey) historicalStatsCache.delete(oldestKey);
+  }
+  historicalStatsCache.set(key, { body, savedAt: Date.now() });
+}
+
 async function sportGet(endpoint) {
   if (!PITCHAPI_KEY) {
     throw new Error("PITCHAPI_KEY non configurata.");
   }
+
+  const statsCacheKey = historicalStatsCacheKey(endpoint);
+  const cachedStats = getCachedHistoricalStats(statsCacheKey);
+  if (cachedStats) return cachedStats;
 
   const response = await fetch(
     `${PITCHAPI_URL}${endpoint}`,
@@ -165,6 +200,7 @@ async function sportGet(endpoint) {
     throw error;
   }
 
+  if (statsCacheKey) cacheHistoricalStats(statsCacheKey, body);
   return body;
 }
 
