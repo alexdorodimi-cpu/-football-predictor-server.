@@ -533,245 +533,8 @@ function buildGoalModel(homeLambda, awayLambda) {
 
 // Simulazione Monte Carlo: estrae risultati dalla distribuzione Poisson
 // gia' costruita dal modello. Le probabilita' analitiche restano il riferimento.
-function runMonteCarlo(matrix, iterations = 10000) {
-  const cumulative = [];
-  let cumulativeProbability = 0;
-
-  for (const item of matrix) {
-    cumulativeProbability += item.probability;
-    cumulative.push({
-      home: item.home,
-      away: item.away,
-      cumulative: cumulativeProbability
-    });
-  }
-
-  const counts = {
-    home_win: 0,
-    draw: 0,
-    away_win: 0,
-    over_1_5: 0,
-    under_1_5: 0,
-    over_2_5: 0,
-    under_2_5: 0,
-    over_3_5: 0,
-    under_3_5: 0,
-    btts_yes: 0,
-    btts_no: 0
-  };
-  const scoreCounts = new Map();
-
-  for (let i = 0; i < iterations; i++) {
-    const random = Math.random();
-    let result = cumulative[cumulative.length - 1];
-
-    for (const candidate of cumulative) {
-      if (random <= candidate.cumulative) {
-        result = candidate;
-        break;
-      }
-    }
-
-    const totalGoals = result.home + result.away;
-    const score = `${result.home}-${result.away}`;
-
-    if (result.home > result.away) counts.home_win++;
-    else if (result.home === result.away) counts.draw++;
-    else counts.away_win++;
-
-    if (totalGoals >= 2) counts.over_1_5++;
-    else counts.under_1_5++;
-
-    if (totalGoals >= 3) counts.over_2_5++;
-    else counts.under_2_5++;
-
-    if (totalGoals >= 4) counts.over_3_5++;
-    else counts.under_3_5++;
-
-    if (result.home > 0 && result.away > 0) counts.btts_yes++;
-    else counts.btts_no++;
-
-    scoreCounts.set(score, (scoreCounts.get(score) || 0) + 1);
-  }
-
-  const simulatedProbabilities = Object.fromEntries(
-    Object.entries(counts).map(([key, count]) => [
-      key,
-      percent(count / iterations)
-    ])
-  );
-
-  const topExactScores = [...scoreCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([score, count]) => ({
-      score,
-      probability: percent(count / iterations)
-    }));
-
-  return {
-    iterations,
-    method: "Monte Carlo su distribuzione Poisson",
-    probabilities: simulatedProbabilities,
-    top_exact_scores: topExactScores
-  };
-}
-
-
 function percent(value) {
   return Number((value * 100).toFixed(1));
-}
-
-const STAT_MARKETS = {
-  corners: { key: "corners", label: "Corner", lines: [7.5, 8.5, 9.5, 10.5, 11.5] },
-  total_shots: { key: "total_shots", label: "Tiri totali", lines: [17.5, 19.5, 21.5, 23.5, 25.5] },
-  shots_on_target: { key: "ShotsOnTarget", label: "Tiri in porta", lines: [5.5, 6.5, 7.5, 8.5, 9.5] },
-  yellow_cards: { key: "yellow_cards", label: "Cartellini gialli", lines: [2.5, 3.5, 4.5, 5.5, 6.5] },
-  red_cards: { key: "red_cards", label: "Cartellini rossi", lines: [0.5, 1.5] }
-};
-
-function extractAllMatchStats(body) {
-  const periods =
-    body?.data?.periods ||
-    body?.response?.data?.periods ||
-    body?.periods ||
-    [];
-  const allPeriod = periods.find(
-    period => String(period.period).toLowerCase() === "all"
-  );
-  if (!allPeriod) return {};
-  const items = allPeriod.groups?.flatMap(group => group.items || []) || [];
-  return Object.fromEntries(
-    Object.entries(STAT_MARKETS).map(([field, config]) => {
-      const item = items.find(stat => stat.key === config.key);
-      return [field, item ? {
-        home: getNumber(item.home),
-        away: getNumber(item.away)
-      } : null];
-    })
-  );
-}
-
-async function runStatsMonteCarlo(fixture, history, iterations = 10000) {
-  const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
-  const homeName = String(fixture.home_team || getHomeName(fixture) || "").trim().toLowerCase();
-  const awayName = String(fixture.away_team || getAwayName(fixture) || "").trim().toLowerCase();
-
-  const eligible = (history || []).filter(match => {
-    const date = match.match_date || match.date;
-    return date && isFinished(match) && new Date(date) < new Date(fixtureDate) && match.id;
-  }).sort((a, b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date));
-
-  const homeMatches = eligible.filter(match =>
-    String(match.home_team || "").trim().toLowerCase() === homeName ||
-    String(match.away_team || "").trim().toLowerCase() === homeName
-  ).slice(0, 10);
-  const awayMatches = eligible.filter(match =>
-    String(match.home_team || "").trim().toLowerCase() === awayName ||
-    String(match.away_team || "").trim().toLowerCase() === awayName
-  ).slice(0, 10);
-
-  const uniqueMatches = [...new Map([...homeMatches, ...awayMatches].map(m => [String(m.id), m])).values()];
-  const statsByMatch = new Map();
-
-  // Limita le richieste concorrenti per non sovraccaricare PitchAPI.
-  for (let i = 0; i < uniqueMatches.length; i += 4) {
-    const batch = uniqueMatches.slice(i, i + 4);
-    const results = await Promise.all(batch.map(async match => {
-      try {
-        const body = await sportGet(`/matches/${encodeURIComponent(match.id)}/stats`);
-        return [String(match.id), extractAllMatchStats(body)];
-      } catch (error) {
-        console.error(`Statistiche Monte Carlo non disponibili per ${match.id}:`, error.message);
-        return [String(match.id), null];
-      }
-    }));
-    for (const [id, stats] of results) statsByMatch.set(id, stats);
-  }
-
-  const output = {};
-  for (const [field, config] of Object.entries(STAT_MARKETS)) {
-    const homeValues = [];
-    const awayValues = [];
-    for (const match of homeMatches) {
-      const stats = statsByMatch.get(String(match.id));
-      const value = stats?.[field];
-      if (!value) continue;
-      const isHome = String(match.home_team || "").trim().toLowerCase() === homeName;
-      const n = isHome ? value.home : value.away;
-      if (n !== null) homeValues.push(n);
-    }
-    for (const match of awayMatches) {
-      const stats = statsByMatch.get(String(match.id));
-      const value = stats?.[field];
-      if (!value) continue;
-      const isHome = String(match.home_team || "").trim().toLowerCase() === awayName;
-      const n = isHome ? value.home : value.away;
-      if (n !== null) awayValues.push(n);
-    }
-
-    if (homeValues.length < 5 || awayValues.length < 5) {
-      output[field] = {
-        label: config.label,
-        available: false,
-        reason: "Servono almeno 5 partite con questa statistica per entrambe le squadre.",
-        samples: { home: homeValues.length, away: awayValues.length }
-      };
-      continue;
-    }
-
-    let homeSum = 0;
-    let awaySum = 0;
-    const overCounts = Object.fromEntries(config.lines.map(line => [String(line), 0]));
-    for (let i = 0; i < iterations; i++) {
-      const home = homeValues[Math.floor(Math.random() * homeValues.length)];
-      const away = awayValues[Math.floor(Math.random() * awayValues.length)];
-      const total = home + away;
-      homeSum += home;
-      awaySum += away;
-      for (const line of config.lines) {
-        if (total > line) overCounts[String(line)]++;
-      }
-    }
-    const homeZeroCount = homeValues.filter(value => value === 0).length;
-    const awayZeroCount = awayValues.filter(value => value === 0).length;
-    const allObservedValuesZero =
-      homeValues.length > 0 &&
-      awayValues.length > 0 &&
-      homeZeroCount === homeValues.length &&
-      awayZeroCount === awayValues.length;
-
-    output[field] = {
-      label: config.label,
-      available: true,
-      iterations,
-      samples: { home: homeValues.length, away: awayValues.length },
-      data_quality: {
-        home_zero_observations: homeZeroCount,
-        away_zero_observations: awayZeroCount,
-        home_nonzero_observations: homeValues.length - homeZeroCount,
-        away_nonzero_observations: awayValues.length - awayZeroCount,
-        all_observed_values_zero: allObservedValuesZero,
-        warning: allObservedValuesZero
-          ? "Tutti i valori ricevuti per questa statistica sono zero. Gli zeri sono stati conservati come dati, ma verifica che PitchAPI li fornisca realmente e non segnali dati mancanti."
-          : null
-      },
-      expected: {
-        home: Number((homeSum / iterations).toFixed(2)),
-        away: Number((awaySum / iterations).toFixed(2)),
-        total: Number(((homeSum + awaySum) / iterations).toFixed(2))
-      },
-      over_probabilities: Object.fromEntries(
-        Object.entries(overCounts).map(([line, count]) => [line, percent(count / iterations)])
-      )
-    };
-  }
-
-  return {
-    iterations,
-    method: "Monte Carlo bootstrap su statistiche storiche PitchAPI",
-    markets: output
-  };
 }
 
 function getReliability(probability, sampleSize) {
@@ -1095,9 +858,6 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
   // Matrice delle probabilità Poisson.
   const matrix = buildGoalModel(homeLambda, awayLambda);
 
-  // 10.000 simulazioni automatiche per ogni partita.
-  const monteCarlo = runMonteCarlo(matrix, 10000);
-
   const sum = fn =>
     matrix
       .filter(fn)
@@ -1172,7 +932,6 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
     },
 
     probabilities,
-    monte_carlo: monteCarlo,
     reliability,
 
     samples: {
@@ -2057,8 +1816,6 @@ app.get(
       const lineupImpact = calculateLineupFormImpact(playerForm);
       const prediction = calculatePrediction(fixture, history, lineupImpact);
 
-      const statsMonteCarlo = await runStatsMonteCarlo(fixture, history);
-
       if (!prediction.ok) {
         return res.status(422).json({
           ok: false,
@@ -2087,8 +1844,6 @@ app.get(
         model_inputs: prediction.model_inputs,
         expected_goals: prediction.expected_goals,
         probabilities: prediction.probabilities,
-        monte_carlo: prediction.monte_carlo,
-        stats_monte_carlo: statsMonteCarlo,
         reliability: prediction.reliability,
         exact_scores: prediction.exact_scores,
 
