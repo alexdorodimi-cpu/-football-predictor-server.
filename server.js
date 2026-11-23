@@ -2623,7 +2623,7 @@ function parseSisalOddsPdfText(text) {
   for (const rawLine of lines) {
     const line = String(rawLine).replace(/\s+/g, " ").trim();
     if (!line) continue;
-    const dateHeading = line.match(/^(?:(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)[,]?\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/i);
+    const normalizedLine = normalizeSisalText(line);\n    const dateHeading = normalizedLine.match(/^(?:(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)[,]?\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/i);
     if (dateHeading) { currentDateLabel = dateHeading[1].padStart(2,"0") + "/" + monthNames[normalizeSisalText(dateHeading[2])]; continue; }
     const prefix = line.match(/^(\d{1,2}\.\d{2})\s+([A-Z0-9]{2,8})\s+(\d{3,6})\s+(\d{2,7})\s+(.+)$/i);
     if (!prefix) continue;
