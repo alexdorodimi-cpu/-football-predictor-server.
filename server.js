@@ -1690,6 +1690,167 @@ app.get(
 );
 
 // ==========================================
+// FORMA INDIVIDUALE DEI TITOLARI (SOLO ANALISI)
+// ==========================================
+
+function extractPlayerRows(body) {
+  const rows =
+    body?.data?.players ||
+    body?.data ||
+    body?.response?.data?.players ||
+    body?.response?.data ||
+    body?.response ||
+    [];
+  return Array.isArray(rows) ? rows : [];
+}
+
+function readPlayerStats(groups) {
+  const result = {};
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const stats = group?.stats;
+    if (!stats || typeof stats !== "object") continue;
+    for (const item of Object.values(stats)) {
+      const key = item?.key;
+      const value = getNumber(item?.stat?.value);
+      if (key && value !== null) result[key] = value;
+    }
+  }
+  return result;
+}
+
+function extractLineupData(body) {
+  return body?.data || body?.response?.data || body?.response || body;
+}
+
+async function getFixturePlayerForm(fixture, history) {
+  const lineupBody = await sportGet(
+    `/matches/${encodeURIComponent(fixture.id)}/lineups`
+  );
+  const lineup = extractLineupData(lineupBody);
+  const sides = [
+    { key: "home", teamName: fixture.home_team, lineup: lineup?.home },
+    { key: "away", teamName: fixture.away_team, lineup: lineup?.away }
+  ];
+  const beforeDate = new Date(fixture.match_date || fixture.date || fixture.datetime);
+  const output = {
+    lineup_confirmed: Boolean(sides.every(side => side.lineup?.confirmed === true)),
+    lineup: {},
+    players: { home: [], away: [] },
+    methodology: "Ultime presenze individuali ricostruite dalle statistiche partita PitchAPI; nessuna correzione applicata alle lambda Poisson."
+  };
+
+  for (const side of sides) {
+    const starters = Array.isArray(side.lineup?.starters) ? side.lineup.starters : [];
+    output.lineup[side.key] = {
+      formation: side.lineup?.formation || null,
+      confirmed: side.lineup?.confirmed === true,
+      lineup_type: side.lineup?.lineup_type || null,
+      starters_count: starters.length
+    };
+    if (!starters.length) continue;
+
+    const teamMatches = (history || [])
+      .filter(match => {
+        const date = match.match_date || match.date;
+        const sameTeam =
+          String(match.home_team || "").toLowerCase() === String(side.teamName || "").toLowerCase() ||
+          String(match.away_team || "").toLowerCase() === String(side.teamName || "").toLowerCase();
+        return date && new Date(date) < beforeDate && isFinished(match) && sameTeam && match.id;
+      })
+      .sort((a, b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date))
+      .slice(0, 10);
+
+    const playerIds = new Set(starters.map(player => String(player.player_id || player.id || "")).filter(Boolean));
+    const appearanceMap = new Map([...playerIds].map(id => [id, []]));
+
+    for (let i = 0; i < teamMatches.length; i += 4) {
+      const batch = teamMatches.slice(i, i + 4);
+      const results = await Promise.all(batch.map(async match => {
+        try {
+          const body = await sportGet(`/matches/${encodeURIComponent(match.id)}/players`);
+          return { match, rows: extractPlayerRows(body) };
+        } catch (error) {
+          console.error(`Player stats non disponibili per ${match.id}:`, error.message);
+          return { match, rows: [] };
+        }
+      }));
+
+      for (const result of results) {
+        for (const row of result.rows) {
+          const playerId = String(row?.player?.id || row?.player_id || "");
+          if (!playerIds.has(playerId)) continue;
+          const stats = readPlayerStats(row.stats);
+          const minutes = stats.minutes_played ?? stats.minutes ?? 0;
+          if (minutes <= 0) continue;
+          appearanceMap.get(playerId).push({
+            match_id: String(result.match.id),
+            date: result.match.match_date || result.match.date || null,
+            minutes,
+            stats
+          });
+        }
+      }
+    }
+
+    for (const player of starters) {
+      const id = String(player.player_id || player.id || "");
+      const appearances = (appearanceMap.get(id) || [])
+        .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+        .slice(0, 10);
+      const totals = {};
+      for (const appearance of appearances) {
+        for (const [key, value] of Object.entries(appearance.stats)) {
+          totals[key] = (totals[key] || 0) + value;
+        }
+      }
+      const averages = Object.fromEntries(
+        Object.entries(totals).map(([key, value]) => [
+          key,
+          Number((value / Math.max(1, appearances.length)).toFixed(3))
+        ])
+      );
+      output.players[side.key].push({
+        player_id: id || null,
+        name: player.name || null,
+        shirt_number: player.shirt_number || null,
+        appearances: appearances.length,
+        minutes_total: appearances.reduce((sum, item) => sum + item.minutes, 0),
+        average_per_appearance: averages,
+        recent_appearances: appearances
+      });
+    }
+  }
+  return output;
+}
+
+app.get(
+  "/api/fixture/:id/player-form",
+  requireDatabase,
+  requireSportApi,
+  async (req, res) => {
+    const matchId = String(req.params.id);
+    try {
+      const { data: fixture, error } = await supabase
+        .from("matches").select("*").eq("id", matchId).maybeSingle();
+      if (error) throw error;
+      if (!fixture) {
+        return res.status(404).json({ ok: false, error: "Partita non trovata in Supabase. Sincronizza prima la data." });
+      }
+      const history = await getLeagueMatchesFromDatabase(fixture.league_id, fixture.season);
+      const playerForm = await getFixturePlayerForm(fixture, history);
+      res.json({
+        ok: true,
+        match: { id: fixture.id, home_team: fixture.home_team, away_team: fixture.away_team, date: fixture.match_date },
+        ...playerForm,
+        note: "Endpoint diagnostico: i dati individuali sono esposti per verifica e NON modificano ancora le previsioni Poisson."
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+);
+
+// ==========================================
 // PRONOSTICO PARTITA
 // ==========================================
 
