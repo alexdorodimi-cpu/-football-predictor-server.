@@ -2224,8 +2224,11 @@ app.get(
         if (toDate && day > toDate) return false;
         return true;
       });
-      const evaluationMatches = dateMatches.slice(-limit);
+      const includeStats = String(req.query.include_stats || "").toLowerCase() === "true";
+      const statsEvaluationLimit = Math.min(Math.max(Number(req.query.stats_limit) || 20, 1), 30);
+      const evaluationMatches = dateMatches.slice(-(includeStats ? Math.min(limit, statsEvaluationLimit) : limit));
       const results = [];
+      const statisticalMarketRows = {};
 
       for (const match of evaluationMatches) {
         if (
@@ -2236,13 +2239,19 @@ app.get(
           continue;
         }
 
-        const prediction = calculatePrediction(
-          match,
-          history
-        );
+        const prediction = calculatePrediction(match, history);
+        if (!prediction?.probabilities) continue;
 
-        if (!prediction?.probabilities) {
-          continue;
+        let historicalStatsForecast = null;
+        let actualMatchStats = null;
+        if (includeStats) {
+          try {
+            historicalStatsForecast = await buildHistoricalStatForecast(match, history);
+            const actualBody = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
+            actualMatchStats = getNormalizedMatchStats(actualBody);
+          } catch (statsError) {
+            console.error("Backtest statistiche " + match.id + ":", statsError.message);
+          }
         }
 
         const p = prediction.probabilities;
@@ -2310,8 +2319,41 @@ app.get(
           },
           probabilities: p,
           expected_goals: prediction.expected_goals || null,
-          exact_scores: prediction.exact_scores || []
+          exact_scores: prediction.exact_scores || [],
+          ...(includeStats ? {
+            statistical_forecast: historicalStatsForecast,
+            actual_statistics: actualMatchStats
+          } : {})
         });
+
+        if (includeStats && historicalStatsForecast?.probabilities && actualMatchStats) {
+          const statFields = ["corners", "total_shots", "shots_on_target", "shots_off_target",
+            "blocked_shots", "yellow_cards", "red_cards", "fouls", "offsides", "saves",
+            "big_chances", "big_chances_missed", "hit_woodwork", "crosses", "long_balls",
+            "duels_won", "aerials_won", "interceptions", "clearances", "box_entries",
+            "progressive_passes", "progressive_carries", "key_passes", "shot_assists"];
+          for (const field of statFields) {
+            const actualHome = getNumber(actualMatchStats[field]?.home);
+            const actualAway = getNumber(actualMatchStats[field]?.away);
+            if (actualHome === null || actualAway === null) continue;
+            const actualValues = { home: actualHome, away: actualAway, total: actualHome + actualAway };
+            for (const side of ["home", "away", "total"]) {
+              const actualValue = actualValues[side];
+              for (let half = 1; half <= 20; half++) {
+                const line = half - 0.5;
+                const suffix = String(line).replace(".", "_");
+                const key = field + "_" + side + "_over_" + suffix;
+                const probability = getNumber(historicalStatsForecast.probabilities[key]);
+                if (probability === null) continue;
+                if (!statisticalMarketRows[key]) statisticalMarketRows[key] = [];
+                statisticalMarketRows[key].push({
+                  probability,
+                  actual: actualValue >= half
+                });
+              }
+            }
+          }
+        }
       }
 
       const evaluated = results.length;
@@ -2563,6 +2605,21 @@ app.get(
 
       const poissonMetrics = buildModelMetrics("probabilities");
       const accuracyByMarket = poissonMetrics;
+      const statisticalAccuracyByMarket = {};
+      for (const [market, tested] of Object.entries(statisticalMarketRows)) {
+        if (!tested.length) continue;
+        let correctCount = 0, brier = 0;
+        for (const item of tested) {
+          if ((item.probability >= 50) === item.actual) correctCount++;
+          brier += Math.pow(item.probability / 100 - (item.actual ? 1 : 0), 2);
+        }
+        statisticalAccuracyByMarket[market] = {
+          evaluated: tested.length,
+          correct: correctCount,
+          accuracy: Number((correctCount / tested.length * 100).toFixed(2)),
+          brier_score: Number((brier / tested.length).toFixed(4))
+        };
+      }
 
       res.json({
         ok: true,
@@ -2581,6 +2638,8 @@ app.get(
         },
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
+        statistical_accuracy_by_market: includeStats ? statisticalAccuracyByMarket : null,
+        statistical_backtest: { enabled: includeStats, evaluated_matches: includeStats ? results.filter(r => r.actual_statistics).length : 0, requested_limit: includeStats ? Math.min(limit, statsEvaluationLimit) : 0 },
         advanced_metrics: advancedMetrics,
         model: "Poisson con shrinkage bayesiano",
         results
