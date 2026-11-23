@@ -16,6 +16,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check server JavaScript syntax
+        run: node --check server.js
+
       - name: Run API smoke tests
         env:
           BASE_URL: https://football-predictor-server-1-b267.onrender.com
