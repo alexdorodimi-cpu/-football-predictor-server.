@@ -2012,12 +2012,85 @@ app.get(
             btts_yes: actualBtts
           },
           probabilities: p,
-          probabilities: p
+          expected_goals: prediction.expected_goals || null,
+          exact_scores: prediction.exact_scores || []
         });
       }
 
       const evaluated = results.length;
       const correct = results.filter(result => result.correct_1x2).length;
+
+      // Metriche aggiuntive: log loss multicategoria, errore gol attesi
+      // e successo del risultato esatto piu' probabile (top-1).
+      const EPSILON = 1e-6;
+      let totalLogLoss = 0;
+      let homeGoalAbsoluteError = 0;
+      let awayGoalAbsoluteError = 0;
+      let homeGoalSquaredError = 0;
+      let awayGoalSquaredError = 0;
+      let exactScoreTop1Hits = 0;
+      let exactScoreEvaluated = 0;
+
+      for (const result of results) {
+        const actualOutcome = result.actual_result;
+        const outcomeProbability = Math.max(
+          EPSILON,
+          Math.min(1, Number(result.probabilities?.[actualOutcome]) / 100)
+        );
+        totalLogLoss += -Math.log(outcomeProbability);
+
+        const expectedHome = Number(result.expected_goals?.home);
+        const expectedAway = Number(result.expected_goals?.away);
+        const [actualHome, actualAway] = result.actual_score.split("-").map(Number);
+
+        if (Number.isFinite(expectedHome)) {
+          const error = expectedHome - actualHome;
+          homeGoalAbsoluteError += Math.abs(error);
+          homeGoalSquaredError += error * error;
+        }
+        if (Number.isFinite(expectedAway)) {
+          const error = expectedAway - actualAway;
+          awayGoalAbsoluteError += Math.abs(error);
+          awayGoalSquaredError += error * error;
+        }
+
+        if (Array.isArray(result.exact_scores) && result.exact_scores.length) {
+          exactScoreEvaluated++;
+          if (result.exact_scores[0]?.score === result.actual_score) {
+            exactScoreTop1Hits++;
+          }
+        }
+      }
+
+      const expectedGoalsEvaluated = results.filter(result =>
+        Number.isFinite(Number(result.expected_goals?.home)) &&
+        Number.isFinite(Number(result.expected_goals?.away))
+      ).length;
+      const exactScoreMetrics = {
+        evaluated: exactScoreEvaluated,
+        top_1_correct: exactScoreTop1Hits,
+        top_1_accuracy: exactScoreEvaluated
+          ? Number((exactScoreTop1Hits / exactScoreEvaluated * 100).toFixed(2))
+          : null
+      };
+      const expectedGoalsError = {
+        evaluated: expectedGoalsEvaluated,
+        home_mae: expectedGoalsEvaluated
+          ? Number((homeGoalAbsoluteError / expectedGoalsEvaluated).toFixed(3))
+          : null,
+        away_mae: expectedGoalsEvaluated
+          ? Number((awayGoalAbsoluteError / expectedGoalsEvaluated).toFixed(3))
+          : null,
+        home_rmse: expectedGoalsEvaluated
+          ? Number(Math.sqrt(homeGoalSquaredError / expectedGoalsEvaluated).toFixed(3))
+          : null,
+        away_rmse: expectedGoalsEvaluated
+          ? Number(Math.sqrt(awayGoalSquaredError / expectedGoalsEvaluated).toFixed(3))
+          : null
+      };
+      const logLoss1x2 = evaluated
+        ? Number((totalLogLoss / evaluated).toFixed(4))
+        : null;
 
       // Fasce di calibrazione: confrontano probabilita' media e frequenza reale.
       function calibrationByBands(tested) {
@@ -2204,6 +2277,11 @@ app.get(
         },
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
+        advanced_metrics: {
+          "1X2": { log_loss: logLoss1x2, lower_is_better: true },
+          expected_goals_error: expectedGoalsError,
+          exact_score_top_1: exactScoreMetrics
+        },
         model: "Poisson con shrinkage bayesiano",
         results
       });
