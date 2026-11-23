@@ -603,6 +603,39 @@ function renderPrediction(prediction,predictionError){
   html+='<div class="predictionError">Risultati esatti non disponibili.</div>';
  }
 
+ const monteCarlo=prediction.monte_carlo||null;
+ const mcProbabilities=monteCarlo?.probabilities||{};
+ html+=`
+ <div class="sectionTitle">SIMULAZIONE MONTE CARLO</div>
+ <div class="help-note">
+  <strong>${escapeHtml(monteCarlo?.iterations??0)} simulazioni</strong><br>
+  ${escapeHtml(monteCarlo?.method||"Simulazione non disponibile")}
+  — risultati simulati sulla distribuzione Poisson.
+ </div>
+ <div class="marketGrid">
+  ${marketCard("Vittoria casa · simulata","home_win",mcProbabilities,{})}
+  ${marketCard("Pareggio · simulato","draw",mcProbabilities,{})}
+  ${marketCard("Vittoria ospite · simulata","away_win",mcProbabilities,{})}
+  ${marketCard("Over 1.5 · simulato","over_1_5",mcProbabilities,{})}
+  ${marketCard("Over 2.5 · simulato","over_2_5",mcProbabilities,{})}
+  ${marketCard("Over 3.5 · simulato","over_3_5",mcProbabilities,{})}
+  ${marketCard("Goal · simulato","btts_yes",mcProbabilities,{})}
+  ${marketCard("No Goal · simulato","btts_no",mcProbabilities,{})}
+ </div>
+ <div class="sectionTitle">RISULTATI ESATTI SIMULATI</div>`;
+ const mcScores=Array.isArray(monteCarlo?.top_exact_scores)
+  ?monteCarlo.top_exact_scores:[];
+ if(mcScores.length){
+  mcScores.forEach(item=>{
+   html+=`
+    <div class="exactScore">
+     <span>Risultato ${escapeHtml(item.score)}</span>
+     <strong>${formatPercent(item.probability)}</strong>
+    </div>`;
+  });
+ }else{
+  html+='<div class="predictionError">Dati Monte Carlo non ricevuti dal server.</div>';
+ }
  html+=`
  <div class="modelInfo">
   Modello: ${escapeHtml(prediction.model||"Poisson")}<br>
