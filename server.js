@@ -1954,7 +1954,7 @@ app.get(
         ok: true,
         match: { id: fixture.id, home_team: fixture.home_team, away_team: fixture.away_team, date: fixture.match_date },
         ...playerForm,
-        note: "Endpoint diagnostico: i dati individuali sono esposti per verifica e NON modificano ancora le previsioni Poisson."
+        note: "Forma e statistiche individuali dei titolari; correzione Poisson applicata solo se le formazioni sono confermate e i dati sono sufficienti."
       });
     } catch (error) {
       handleError(res, error);
