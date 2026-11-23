@@ -1004,9 +1004,6 @@ function calculatePrediction(fixture, history) {
   const awayFor = weightedAverage(awaySample, "scored");
   const awayAgainst = weightedAverage(awaySample, "conceded");
 
-  const overallHomeLambda = (homeFor + awayAgainst) / 2;
-  const overallAwayLambda = (awayFor + homeAgainst) / 2;
-
   // Shrinkage bayesiano: regolarizza le medie della squadra verso
   // quelle del campionato per ridurre l'effetto di campioni piccoli.
   const PRIOR_MATCHES = 3;
