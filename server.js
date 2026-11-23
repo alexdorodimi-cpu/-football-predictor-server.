@@ -513,20 +513,18 @@ function percent(value) {
 }
 
 function getReliability(probability, sampleSize) {
-  let score = probability;
-
-  if (sampleSize < 10) {
-    score -= (10 - sampleSize) * 2;
-  }
-
-  score = Math.max(0, Math.min(100, score));
+  // La probabilita prevista non misura l'affidabilita del modello.
+  // Il livello descrive solo l'ampiezza del campione disponibile.
+  const level =
+    sampleSize >= 30 ? "ALTA" :
+    sampleSize >= 10 ? "MODERATA" :
+    "LIMITATA";
 
   return {
-    score: Number(score.toFixed(1)),
-    level:
-      score >= 75 ? "ALTA" :
-      score >= 60 ? "MEDIA" :
-      "BASSA"
+    score: Number(Math.max(0, Math.min(100, sampleSize / 30 * 100)).toFixed(1)),
+    level,
+    sample_size: sampleSize,
+    note: "Qualita del campione, non probabilita di successo."
   };
 }
 
@@ -1521,6 +1519,17 @@ app.get(
         300
       );
 
+      const targetDate = req.query.date
+        ? String(req.query.date).trim()
+        : null;
+
+      if (targetDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(targetDate)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Data non valida. Usa il formato YYYY-MM-DD."
+        });
+      }
+
       const season = req.query.season
         ? String(req.query.season).trim()
         : null;
@@ -1552,7 +1561,12 @@ app.get(
       const history = (data || []).sort((a, b) =>
         new Date(a.match_date) - new Date(b.match_date)
       );
-      const evaluationMatches = history.slice(-limit);
+      const dateMatches = targetDate
+        ? history.filter(match =>
+            String(match.match_date || "").slice(0, 10) === targetDate
+          )
+        : history;
+      const evaluationMatches = dateMatches.slice(-limit);
       const results = [];
 
       for (const match of evaluationMatches) {
@@ -1591,49 +1605,84 @@ app.get(
           (a, b) => p[b] - p[a]
         )[0];
 
+        const totalGoals = actual.home + actual.away;
+        const actualOver15 = totalGoals >= 2;
+        const actualOver25 = totalGoals >= 3;
+        const actualOver35 = totalGoals >= 4;
+        const actualBtts = actual.home > 0 && actual.away > 0;
+
         results.push({
           match_id: match.id,
+          match_date: match.match_date,
           home_team: match.home_team,
           away_team: match.away_team,
           actual_result: actualResult,
           predicted_result: predictedResult,
           correct_1x2: predictedResult === actualResult,
-          actual_goals: actual.home + actual.away,
+          actual_goals: totalGoals,
+          actual_score: `${actual.home}-${actual.away}`,
+          actual_markets: {
+            over_1_5: actualOver15,
+            over_2_5: actualOver25,
+            over_3_5: actualOver35,
+            btts_yes: actualBtts
+          },
           probabilities: p
         });
       }
 
       const evaluated = results.length;
+      const correct = results.filter(result => result.correct_1x2).length;
 
-      const correct = results.filter(
-        result => result.correct_1x2
-      ).length;
+      function marketMetrics(key, actualKey, threshold = 50) {
+        const tested = results.filter(result =>
+          Number.isFinite(Number(result.probabilities?.[key])) &&
+          typeof result.actual_markets?.[actualKey] === "boolean"
+        );
+        if (!tested.length) return { evaluated: 0, correct: 0, accuracy: null, brier_score: null };
+        let hits = 0;
+        let brier = 0;
+        for (const result of tested) {
+          const probability = Number(result.probabilities[key]) / 100;
+          const actual = result.actual_markets[actualKey] ? 1 : 0;
+          if ((probability >= threshold / 100) === Boolean(actual)) hits++;
+          brier += Math.pow(probability - actual, 2);
+        }
+        return {
+          evaluated: tested.length,
+          correct: hits,
+          accuracy: Number((hits / tested.length * 100).toFixed(2)),
+          brier_score: Number((brier / tested.length).toFixed(4))
+        };
+      }
+
+      const accuracyByMarket = {
+        "1X2": {
+          evaluated,
+          correct,
+          accuracy: evaluated ? Number((correct / evaluated * 100).toFixed(2)) : null
+        },
+        over_1_5: marketMetrics("over_1_5", "over_1_5"),
+        over_2_5: marketMetrics("over_2_5", "over_2_5"),
+        over_3_5: marketMetrics("over_3_5", "over_3_5"),
+        btts_yes: marketMetrics("btts_yes", "btts_yes")
+      };
 
       res.json({
         ok: true,
         league_id: leagueId,
         season,
+        target_date: targetDate,
         requested_matches: limit,
         available_history_matches: history.length,
+        matches_on_target_date: dateMatches.length,
         evaluation_matches_selected: evaluationMatches.length,
         evaluation_period: {
           from: evaluationMatches[0]?.match_date || null,
           to: evaluationMatches[evaluationMatches.length - 1]?.match_date || null
         },
         evaluated_matches: evaluated,
-
-        accuracy_by_market: {
-          "1X2": {
-            evaluated,
-            correct,
-            accuracy: evaluated
-              ? Number(
-                  (correct / evaluated * 100).toFixed(2)
-                )
-              : 0
-          }
-        },
-
+        accuracy_by_market: accuracyByMarket,
         results
       });
     } catch (error) {
@@ -1929,6 +1978,8 @@ app.get(
           values.length
         ])
       );
+      statsSampleCounts.goals_for = analyzed;
+      statsSampleCounts.goals_against = analyzed;
 
       res.json({
         ok: true,
