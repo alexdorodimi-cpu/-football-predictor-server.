@@ -82,6 +82,16 @@ async function run() {
     check("struttura pronostico", prediction.body?.probabilities != null &&
       prediction.body?.expected_goals != null && prediction.body?.reliability != null,
       "mancano probabilities, expected_goals o reliability");
+
+    const reliabilityEntries = Object.values(prediction.body?.reliability || {});
+    check("rating qualità dati con campioni reali",
+      reliabilityEntries.length > 0 && reliabilityEntries.every(item =>
+        Number.isFinite(Number(item?.score)) &&
+        Number(item?.sample_size?.home) > 0 &&
+        Number(item?.sample_size?.away) > 0 &&
+        item?.components != null
+      ),
+      "rating incompleto o campioni casa/trasferta mancanti");
   } else {
     console.log("SKIP  test pronostico: TEST_MATCH_ID non configurato.");
   }
