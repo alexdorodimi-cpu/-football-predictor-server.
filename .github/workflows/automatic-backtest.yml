@@ -1,0 +1,37 @@
+name: Football Predictor automatic backtest
+
+on:
+  schedule:
+    - cron: "20 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  automatic-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run automatic backtest
+        env:
+          BASE_URL: https://football-predictor-server-1-b267.onrender.com
+          PREDICTOR_ACCESS_TOKEN: ${{ secrets.PREDICTOR_ACCESS_TOKEN }}
+          LEAGUE_ID: l_0ALvwF
+          SEASON: "2026/2027"
+          BACKTEST_LIMIT: "300"
+          TARGET_ACCURACY: "60"
+          MIN_EVALUATED: "30"
+        run: node scripts/automatic-backtest.js
+
+      - name: Save backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automatic-backtest-report
+          path: reports/automatic-backtest-latest.json
+          if-no-files-found: ignore
+          retention-days: 90
