@@ -1578,6 +1578,7 @@ app.get(
         samples: prediction.samples,
         expected_goals: prediction.expected_goals,
         probabilities: prediction.probabilities,
+        monte_carlo: prediction.monte_carlo,
         reliability: prediction.reliability,
         exact_scores: prediction.exact_scores,
 
