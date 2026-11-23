@@ -733,11 +733,29 @@ async function runStatsMonteCarlo(fixture, history, iterations = 10000) {
         if (total > line) overCounts[String(line)]++;
       }
     }
+    const homeZeroCount = homeValues.filter(value => value === 0).length;
+    const awayZeroCount = awayValues.filter(value => value === 0).length;
+    const allObservedValuesZero =
+      homeValues.length > 0 &&
+      awayValues.length > 0 &&
+      homeZeroCount === homeValues.length &&
+      awayZeroCount === awayValues.length;
+
     output[field] = {
       label: config.label,
       available: true,
       iterations,
       samples: { home: homeValues.length, away: awayValues.length },
+      data_quality: {
+        home_zero_observations: homeZeroCount,
+        away_zero_observations: awayZeroCount,
+        home_nonzero_observations: homeValues.length - homeZeroCount,
+        away_nonzero_observations: awayValues.length - awayZeroCount,
+        all_observed_values_zero: allObservedValuesZero,
+        warning: allObservedValuesZero
+          ? "Tutti i valori ricevuti per questa statistica sono zero. Gli zeri sono stati conservati come dati, ma verifica che PitchAPI li fornisca realmente e non segnali dati mancanti."
+          : null
+      },
       expected: {
         home: Number((homeSum / iterations).toFixed(2)),
         away: Number((awaySum / iterations).toFixed(2)),
