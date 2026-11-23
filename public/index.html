@@ -598,6 +598,9 @@ function renderPrediction(prediction,predictionError){
   Modello: ${escapeHtml(prediction.model||"Poisson")}<br>
   Campioni analizzati: casa ${escapeHtml(samples.home??"N/D")} ·
   ospite ${escapeHtml(samples.away??"N/D")}<br>
+  Ultime gare in casa: ${escapeHtml(samples.home_at_home??"N/D")} ·
+  ultime gare in trasferta: ${escapeHtml(samples.away_away??"N/D")}<br>
+  Partite campionato precedenti: ${escapeHtml(samples.league_matches??"N/D")}<br>
   Le percentuali rappresentano stime del modello statistico.
  </div>`;
 
