@@ -5,8 +5,12 @@ on:
     branches:
       - main
   schedule:
-    - cron: "20 7 * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+
+concurrency:
+  group: football-predictor-automatic-backtest
+  cancel-in-progress: false
 
 permissions:
   contents: read
