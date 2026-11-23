@@ -2577,7 +2577,7 @@ app.get(
         mode,
         bookmaker: "Sisal",
         sisal_feed: { available: sisalData.available, stale: sisalData.stale, updated_at: sisalData.updated_at, age_minutes: sisalData.age_minutes, events_count: sisalData.events.length },
-        market_policy: "Mercati standard Poisson: 1X2, Over/Under gol e Goal/No Goal. La disponibilità effettiva va verificata nell’evento Sisal.",
+        market_policy: "Selezioni mostrate solo quando la partita è abbinata in modo univoco al PDF Sisal aggiornato e la quota del mercato è presente.",
         minimum_probability: minProbability,
         max_matches: maxMatches,
         max_selections: maxSelections,
