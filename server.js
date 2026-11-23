@@ -872,19 +872,22 @@ function sampleForTeamByName(
       new Date(a.match_date || a.date)
     )
     .slice(0, 10)
-    .map(match => {
+    .map((match, index) => {
       const home =
         String(match.home_team || "")
           .trim()
           .toLowerCase() === target;
 
       return {
-        scored: Number(
-          home ? match.home_goals : match.away_goals
-        ),
-        conceded: Number(
-          home ? match.away_goals : match.home_goals
-        )
+        scored: Number(home ? match.home_goals : match.away_goals),
+        conceded: Number(home ? match.away_goals : match.home_goals),
+        date: match.match_date || match.date || null,
+        opponent: home ? match.away_team : match.home_team,
+        home_team: match.home_team || null,
+        away_team: match.away_team || null,
+        score: `${match.home_goals}-${match.away_goals}`,
+        venue: home ? "home" : "away",
+        weight: Number(Math.pow(0.75, index).toFixed(4))
       };
     });
 }
@@ -922,13 +925,20 @@ function sampleForTeamByVenue(matches, teamName, beforeDate, venue) {
       new Date(a.match_date || a.date)
     )
     .slice(0, 5)
-    .map(match => {
+    .map((match, index) => {
       const isHome =
         String(match.home_team || "").trim().toLowerCase() === target;
 
       return {
         scored: Number(isHome ? match.home_goals : match.away_goals),
-        conceded: Number(isHome ? match.away_goals : match.home_goals)
+        conceded: Number(isHome ? match.away_goals : match.home_goals),
+        date: match.match_date || match.date || null,
+        opponent: isHome ? match.away_team : match.home_team,
+        home_team: match.home_team || null,
+        away_team: match.away_team || null,
+        score: `${match.home_goals}-${match.away_goals}`,
+        venue,
+        weight: Number(Math.pow(0.75, index).toFixed(4))
       };
     });
 }
@@ -1163,6 +1173,12 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
         home_conceded: Number(homeAgainst.toFixed(3)),
         away_scored: Number(awayFor.toFixed(3)),
         away_conceded: Number(awayAgainst.toFixed(3))
+      },
+      recent_matches: {
+        home: homeSample,
+        away: awaySample,
+        home_at_home: homeVenueSample,
+        away_away: awayVenueSample
       },
       venue_weighted_averages: {
         home_scored_at_home: Number(weightedAverage(homeVenueSample, "scored").toFixed(3)),
