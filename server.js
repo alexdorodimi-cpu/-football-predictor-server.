@@ -2350,6 +2350,12 @@ app.get(
                   probability,
                   actual: actualValue >= half
                 });
+                const underKey = field + "_" + side + "_under_" + suffix;
+                if (!statisticalMarketRows[underKey]) statisticalMarketRows[underKey] = [];
+                statisticalMarketRows[underKey].push({
+                  probability: 100 - probability,
+                  actual: actualValue < half
+                });
               }
             }
           }
