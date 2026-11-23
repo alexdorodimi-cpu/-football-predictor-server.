@@ -494,7 +494,7 @@ function escapeHtml(value){
  }[char]));
 }
 
-function makeStat(label,homeValue,awayValue){
+function makeStat(label,homeValue,awayValue,homeLabel=label,awayLabel=label){
  const home=getNumber(homeValue);
  const away=getNumber(awayValue);
  const max=Math.max(home||0,away||0,1);
@@ -653,7 +653,22 @@ function renderAnalysis(home,away,homeStats,awayStats,prediction,predictionError
  <div class="sectionTitle">CONFRONTO STATISTICO</div>`;
 
  stats.forEach(stat=>{
-  html+=makeStat(stat[0],homeStats[stat[1]],awayStats[stat[1]]);
+  const homeCount=homeStats._sample_counts?.[stat[1]];
+  const awayCount=awayStats._sample_counts?.[stat[1]];
+  const homeLabel=Number.isInteger(homeCount)
+   ?"Casa "+homeCount+"/"+homeStats._matches_requested
+   :"Casa: dato non disponibile";
+  const awayLabel=Number.isInteger(awayCount)
+   ?"Ospite "+awayCount+"/"+awayStats._matches_requested
+   :"Ospite: dato non disponibile";
+
+  html+=makeStat(
+   stat[0],
+   homeStats[stat[1]],
+   awayStats[stat[1]],
+   homeLabel,
+   awayLabel
+  );
  });
 
  html+=renderPrediction(prediction,predictionError);
@@ -797,13 +812,25 @@ async function loadMatches(){
       api(urlPrediction)
      ]);
 
-     const homeStats=results[0].status==="fulfilled"
-      ?(results[0].value.averages||{})
+     const homeResponse=results[0].status==="fulfilled"
+      ?results[0].value
       :{};
 
-     const awayStats=results[1].status==="fulfilled"
-      ?(results[1].value.averages||{})
+     const awayResponse=results[1].status==="fulfilled"
+      ?results[1].value
       :{};
+
+     const homeStats={
+      ...(homeResponse.averages||{}),
+      _sample_counts:homeResponse.stats_sample_counts||{},
+      _matches_requested:homeResponse.matches_requested||0
+     };
+
+     const awayStats={
+      ...(awayResponse.averages||{}),
+      _sample_counts:awayResponse.stats_sample_counts||{},
+      _matches_requested:awayResponse.matches_requested||0
+     };
 
      const prediction=results[2].status==="fulfilled"
       ?results[2].value
