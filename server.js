@@ -2453,7 +2453,7 @@ app.get(
             const parsed = parseSisalOddsPdfText(pdfResult.text || "");
             const updated = parsed.updated_at ? Date.parse(parsed.updated_at) : NaN;
             const age = Number.isFinite(updated) ? Math.max(0, Math.round((Date.now() - updated) / 60000)) : null;
-            sisalData = { available: parsed.events.length > 0 && age !== null && age <= 180, stale: age === null || age > 180, events: parsed.events, updated_at: parsed.updated_at, age_minutes: age, diagnostics: parsed.diagnostics };
+            sisalData = { available: parsed.events.length > 0 && age !== null && age <= 360, stale: age === null || age > 360, events: parsed.events, updated_at: parsed.updated_at, age_minutes: age, diagnostics: parsed.diagnostics };
           }
         }
       } catch (sisalError) {
@@ -2706,7 +2706,7 @@ app.get("/api/sisal/odds", async (req, res) => {
     const ageMinutes = Number.isFinite(updatedTime)
       ? Math.max(0, Math.round((Date.now() - updatedTime) / 60000))
       : null;
-    const stale = ageMinutes === null || ageMinutes > 180;
+    const stale = ageMinutes === null || ageMinutes > 360;
 
     res.json({
       ok: true,
@@ -2717,7 +2717,7 @@ app.get("/api/sisal/odds", async (req, res) => {
       updated_at: parsed.updated_at,
       age_minutes: ageMinutes,
       stale,
-      stale_after_minutes: 180,
+      stale_after_minutes: 360,
       events_count: parsed.events.length,
       events: parsed.events,
       diagnostics: parsed.diagnostics,
