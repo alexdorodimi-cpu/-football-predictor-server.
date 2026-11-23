@@ -29,7 +29,6 @@ jobs:
           BASE_URL: https://football-predictor-server-1-b267.onrender.com
           PREDICTOR_ACCESS_TOKEN: ${{ secrets.PREDICTOR_ACCESS_TOKEN }}
           LEAGUE_ID: l_0ALvwF
-          SEASON: "2026/2027"
           BACKTEST_LIMIT: "300"
           TARGET_ACCURACY: "60"
           MIN_EVALUATED: "30"
