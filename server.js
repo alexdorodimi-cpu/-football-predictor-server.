@@ -1896,15 +1896,24 @@ app.get(
         possession: calculateWeightedStat(statSamples.possession)
       };
 
+      const statsSampleCounts = Object.fromEntries(
+        Object.entries(statSamples).map(([field, values]) => [
+          field,
+          values.length
+        ])
+      );
+
       res.json({
         ok: true,
         team: {
           id: teamId,
           name: teamName
         },
+        matches_requested: matches.length,
         matches_analyzed: analyzed,
         stats_matches_analyzed: statsMatchesAnalyzed,
         stats_matches_failed: statsMatchesFailed,
+        stats_sample_counts: statsSampleCounts,
         averages,
         results: [
           {
