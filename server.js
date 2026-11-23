@@ -2652,8 +2652,14 @@ function parseSisalOddsPdfText(text) {
 function findSisalEventForFixture(events, fixture) {
   const home = normalizeSisalText(fixture.home_team);
   const away = normalizeSisalText(fixture.away_team);
-  if (!home || !away) return null;
-  const matches = events.filter(event => { const value = normalizeSisalText(event.team_text); return value.includes(home) && value.includes(away); });
+  const fixtureDate = String(fixture.match_date || fixture.date || "").slice(0, 10);
+  if (!home || !away || !/^\d{4}-\d{2}-\d{2}$/.test(fixtureDate)) return null;
+  const parts = fixtureDate.split("-");
+  const expectedLabel = parts[2] + "/" + parts[1];
+  const matches = events.filter(event => {
+    const value = normalizeSisalText(event.team_text);
+    return event.date_label === expectedLabel && value.includes(home) && value.includes(away);
+  });
   return matches.length === 1 ? matches[0] : null;
 }
 
