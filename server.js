@@ -1657,33 +1657,98 @@ app.get(
       const evaluated = results.length;
       const correct = results.filter(result => result.correct_1x2).length;
 
+      // Fasce di calibrazione: confrontano probabilita' media e frequenza reale.
+      function calibrationByBands(tested) {
+        const bands = Array.from({ length: 10 }, (_, index) => ({
+          range: `${index * 10}-${(index + 1) * 10}%`,
+          count: 0,
+          probability_sum: 0,
+          observed_sum: 0
+        }));
+
+        for (const item of tested) {
+          const probability = Math.max(0, Math.min(1, item.probability));
+          const index = Math.min(9, Math.floor(probability * 10));
+          bands[index].count++;
+          bands[index].probability_sum += probability;
+          bands[index].observed_sum += item.actual;
+        }
+
+        return bands
+          .filter(band => band.count > 0)
+          .map(band => ({
+            range: band.range,
+            count: band.count,
+            average_predicted_probability: Number((band.probability_sum / band.count * 100).toFixed(2)),
+            actual_frequency: Number((band.observed_sum / band.count * 100).toFixed(2))
+          }));
+      }
+
       function marketMetrics(key, actualKey, threshold = 50) {
-        const tested = results.filter(result =>
-          Number.isFinite(Number(result.probabilities?.[key])) &&
-          typeof result.actual_markets?.[actualKey] === "boolean"
-        );
-        if (!tested.length) return { evaluated: 0, correct: 0, accuracy: null, brier_score: null };
+        const tested = results
+          .filter(result =>
+            Number.isFinite(Number(result.probabilities?.[key])) &&
+            typeof result.actual_markets?.[actualKey] === "boolean"
+          )
+          .map(result => ({
+            probability: Number(result.probabilities[key]) / 100,
+            actual: result.actual_markets[actualKey] ? 1 : 0
+          }));
+
+        if (!tested.length) {
+          return {
+            evaluated: 0,
+            correct: 0,
+            accuracy: null,
+            brier_score: null,
+            calibration: []
+          };
+        }
+
         let hits = 0;
         let brier = 0;
-        for (const result of tested) {
-          const probability = Number(result.probabilities[key]) / 100;
-          const actual = result.actual_markets[actualKey] ? 1 : 0;
-          if ((probability >= threshold / 100) === Boolean(actual)) hits++;
-          brier += Math.pow(probability - actual, 2);
+        for (const item of tested) {
+          if ((item.probability >= threshold / 100) === Boolean(item.actual)) hits++;
+          brier += Math.pow(item.probability - item.actual, 2);
         }
+
         return {
           evaluated: tested.length,
           correct: hits,
           accuracy: Number((hits / tested.length * 100).toFixed(2)),
-          brier_score: Number((brier / tested.length).toFixed(4))
+          brier_score: Number((brier / tested.length).toFixed(4)),
+          calibration: calibrationByBands(tested)
         };
       }
+
+      const outcomeCalibration = {};
+      let multiclassBrier = 0;
+      for (const outcome of ["1", "X", "2"]) {
+        const tested = results
+          .filter(result => Number.isFinite(Number(result.probabilities?.[outcome])))
+          .map(result => ({
+            probability: Number(result.probabilities[outcome]) / 100,
+            actual: result.actual_result === outcome ? 1 : 0
+          }));
+
+        outcomeCalibration[outcome] = calibrationByBands(tested);
+        for (const item of tested) {
+          multiclassBrier += Math.pow(item.probability - item.actual, 2);
+        }
+      }
+
+      // Brier multicategoria normalizzato per 3 esiti (scala 0-1).
+      const brier1x2 = evaluated
+        ? Number((multiclassBrier / (evaluated * 3)).toFixed(4))
+        : null;
 
       const accuracyByMarket = {
         "1X2": {
           evaluated,
           correct,
-          accuracy: evaluated ? Number((correct / evaluated * 100).toFixed(2)) : null
+          accuracy: evaluated ? Number((correct / evaluated * 100).toFixed(2)) : null,
+          brier_score_normalized: brier1x2,
+          calibration_by_outcome: outcomeCalibration
         },
         over_1_5: marketMetrics("over_1_5", "over_1_5"),
         over_2_5: marketMetrics("over_2_5", "over_2_5"),
