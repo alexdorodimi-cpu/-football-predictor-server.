@@ -366,7 +366,8 @@ app.post(
       const batchSize = Math.min(100, Math.max(1, Number.parseInt(req.query.batch_size || "50", 10) || 50));
       const { data: matches, error: matchesError } = await supabase
         .from("matches").select("id,league_id,match_date")
-        .eq("league_id", leagueId).not("match_date", "is", null)
+        .eq("league_id", leagueId).in("status", ["FT", "AET", "PENS", "FINISHED", "COMPLETED"])
+        .not("match_date", "is", null)
         .order("match_date", { ascending: true }).range(offset, offset + batchSize - 1);
       if (matchesError) throw matchesError;
       const rows = await mapWithConcurrency(matches || [], 5, async match => {
