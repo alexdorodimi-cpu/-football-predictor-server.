@@ -1521,21 +1521,39 @@ app.get(
         300
       );
 
-      const { data, error } = await supabase
+      const season = req.query.season
+        ? String(req.query.season).trim()
+        : null;
+
+      if (season && !/^\\d{4}\\/\\d{4}$/.test(season)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Stagione non valida. Usa il formato YYYY/YYYY."
+        });
+      }
+
+      let backtestQuery = supabase
         .from("matches")
         .select("*")
         .eq("league_id", leagueId)
         .not("home_goals", "is", null)
         .not("away_goals", "is", null)
         .order("match_date", { ascending: true })
-        .limit(limit);
+        .limit(5000);
+
+      if (season) {
+        backtestQuery = backtestQuery.eq("season", season);
+      }
+
+      const { data, error } = await backtestQuery;
 
       if (error) throw error;
 
       const history = data || [];
+      const evaluationMatches = history.slice(-limit);
       const results = [];
 
-      for (const match of history) {
+      for (const match of evaluationMatches) {
         if (
           match.home_goals === null ||
           match.away_goals === null ||
@@ -1592,7 +1610,14 @@ app.get(
       res.json({
         ok: true,
         league_id: leagueId,
+        season,
         requested_matches: limit,
+        available_history_matches: history.length,
+        evaluation_matches_selected: evaluationMatches.length,
+        evaluation_period: {
+          from: evaluationMatches[0]?.match_date || null,
+          to: evaluationMatches[evaluationMatches.length - 1]?.match_date || null
+        },
         evaluated_matches: evaluated,
 
         accuracy_by_market: {
