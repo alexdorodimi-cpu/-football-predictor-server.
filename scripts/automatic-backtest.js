@@ -55,8 +55,8 @@ async function main() {
     };
   }
 
-  // Ottimizza le soglie decisionali solo sul blocco storico più vecchio;
-  // il blocco cronologicamente più recente resta holdout e non viene usato per scegliere soglie.
+  // Ricerca soglie sui dati storici più vecchi. Il blocco più recente resta holdout.
+  // La selezione usa balanced accuracy per ridurre il vantaggio artificiale della classe maggioritaria.
   const binaryDefinitions = [
     { name: "Over 1.5", probability: "over_1_5", actual: "over_1_5" },
     { name: "Over 2.5", probability: "over_2_5", actual: "over_2_5" },
@@ -70,49 +70,90 @@ async function main() {
   const training = orderedResults.slice(0, splitAt);
   const holdout = orderedResults.slice(splitAt);
   const thresholdOptimization = {};
+  const candidateConfig = {
+    generated_at: new Date().toISOString(),
+    league_id: leagueId,
+    season,
+    source_model: data.model || null,
+    training_share_percent: 70,
+    holdout_share_percent: 30,
+    selection_metric: "balanced_accuracy",
+    production_applied: false,
+    thresholds: {}
+  };
 
   for (const market of binaryDefinitions) {
-    const rows = list => list.filter(row =>
+    const validRows = list => list.filter(row =>
       Number.isFinite(Number(row.probabilities?.[market.probability])) &&
       typeof row.actual_markets?.[market.actual] === "boolean"
     );
-    const trainRows = rows(training);
-    const testRows = rows(holdout);
-    let best = { threshold: 0.5, accuracy: -1, correct: 0, evaluated: trainRows.length };
+    const trainRows = validRows(training);
+    const testRows = validRows(holdout);
+    let best = { threshold: 0.5, balancedAccuracy: -1, accuracy: null, correct: 0, evaluated: trainRows.length };
 
-    // Griglia predefinita, nessun uso dei risultati holdout per scegliere la soglia.
-    for (let threshold = 0.30; threshold <= 0.70001; threshold += 0.01) {
-      let correct = 0;
+    for (let step = 30; step <= 70; step++) {
+      const threshold = step / 100;
+      let tp = 0, tn = 0, fp = 0, fn = 0;
       for (const row of trainRows) {
         const predicted = Number(row.probabilities[market.probability]) / 100 >= threshold;
-        if (predicted === row.actual_markets[market.actual]) correct++;
+        const actual = row.actual_markets[market.actual];
+        if (predicted && actual) tp++;
+        else if (!predicted && !actual) tn++;
+        else if (predicted && !actual) fp++;
+        else fn++;
       }
-      const accuracy = trainRows.length ? correct / trainRows.length : -1;
-      if (accuracy > best.accuracy + 1e-12 ||
-          (Math.abs(accuracy - best.accuracy) <= 1e-12 && Math.abs(threshold - 0.5) < Math.abs(best.threshold - 0.5))) {
-        best = { threshold: Number(threshold.toFixed(2)), accuracy, correct, evaluated: trainRows.length };
+      const sensitivity = tp + fn ? tp / (tp + fn) : 0;
+      const specificity = tn + fp ? tn / (tn + fp) : 0;
+      const balancedAccuracy = (sensitivity + specificity) / 2;
+      const accuracy = trainRows.length ? (tp + tn) / trainRows.length : null;
+      if (balancedAccuracy > best.balancedAccuracy + 1e-12 ||
+          (Math.abs(balancedAccuracy - best.balancedAccuracy) <= 1e-12 && Math.abs(threshold - 0.5) < Math.abs(best.threshold - 0.5))) {
+        best = { threshold, balancedAccuracy, accuracy, correct: tp + tn, evaluated: trainRows.length };
       }
     }
 
-    let holdoutCorrect = 0;
+    let tp = 0, tn = 0, fp = 0, fn = 0;
     let baselineCorrect = 0;
     for (const row of testRows) {
       const probability = Number(row.probabilities[market.probability]) / 100;
-      if ((probability >= best.threshold) === row.actual_markets[market.actual]) holdoutCorrect++;
-      if ((probability >= 0.5) === row.actual_markets[market.actual]) baselineCorrect++;
+      const predicted = probability >= best.threshold;
+      const actual = row.actual_markets[market.actual];
+      if (predicted && actual) tp++;
+      else if (!predicted && !actual) tn++;
+      else if (predicted && !actual) fp++;
+      else fn++;
+      if ((probability >= 0.5) === actual) baselineCorrect++;
     }
-    const holdoutAccuracy = testRows.length ? Number((holdoutCorrect / testRows.length * 100).toFixed(2)) : null;
+    const holdoutAccuracy = testRows.length ? Number(((tp + tn) / testRows.length * 100).toFixed(2)) : null;
+    const holdoutBalancedAccuracy = testRows.length
+      ? Number((((tp + fn ? tp / (tp + fn) : 0) + (tn + fp ? tn / (tn + fp) : 0)) / 2 * 100).toFixed(2))
+      : null;
     const baselineAccuracy = testRows.length ? Number((baselineCorrect / testRows.length * 100).toFixed(2)) : null;
+    const enoughTraining = trainRows.length >= Math.max(20, Math.floor(minimumEvaluated * 0.5));
+    const enoughHoldout = testRows.length >= Math.max(10, Math.floor(minimumEvaluated * 0.2));
+    const approvedForReview = enoughTraining && enoughHoldout && holdoutBalancedAccuracy !== null &&
+      holdoutBalancedAccuracy >= 50 && holdoutAccuracy >= targetAccuracy;
+
     thresholdOptimization[market.name] = {
       selected_threshold_percent: Number((best.threshold * 100).toFixed(0)),
       training_evaluated: trainRows.length,
-      training_accuracy: trainRows.length ? Number((best.accuracy * 100).toFixed(2)) : null,
+      training_accuracy: best.accuracy === null ? null : Number((best.accuracy * 100).toFixed(2)),
+      training_balanced_accuracy: best.balancedAccuracy < 0 ? null : Number((best.balancedAccuracy * 100).toFixed(2)),
       holdout_evaluated: testRows.length,
       holdout_accuracy: holdoutAccuracy,
+      holdout_balanced_accuracy: holdoutBalancedAccuracy,
       holdout_baseline_50_percent_accuracy: baselineAccuracy,
-      holdout_meets_target: testRows.length >= Math.max(10, Math.floor(minimumEvaluated * 0.2)) && holdoutAccuracy !== null && holdoutAccuracy >= targetAccuracy,
+      candidate_eligible_for_review: approvedForReview,
       applied_to_model: false,
-      note: "Soglia decisionale suggerita; modello Poisson invariato. Validare su nuovi dati prima dell'adozione."
+      note: "Configurazione candidata: richiede revisione e validazione su dati futuri; il modello in produzione non viene modificato."
+    };
+    candidateConfig.thresholds[market.probability] = {
+      threshold: best.threshold,
+      training_evaluated: trainRows.length,
+      holdout_evaluated: testRows.length,
+      holdout_accuracy_percent: holdoutAccuracy,
+      holdout_balanced_accuracy_percent: holdoutBalancedAccuracy,
+      eligible_for_review: approvedForReview
     };
   }
 
@@ -139,6 +180,7 @@ async function main() {
 
   fs.mkdirSync("reports", { recursive: true });
   fs.writeFileSync("reports/automatic-backtest-latest.json", JSON.stringify(report, null, 2));
+  fs.writeFileSync("reports/optimization-candidate.json", JSON.stringify(candidateConfig, null, 2));
   console.log(JSON.stringify(report, null, 2));
   console.log(allMarketsMeetTarget
     ? "Obiettivo raggiunto su tutti i mercati con campione minimo."
