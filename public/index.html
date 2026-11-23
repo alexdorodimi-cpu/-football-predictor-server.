@@ -647,12 +647,15 @@ function renderPrediction(prediction,predictionError){
 
 function marketCard(label,key,probabilities,reliability){
  const value=probabilities[key];
- const level=reliability[key]?.level||"";
+ const rating=reliability[key]||null;
+ const level=rating?.level||"";
+ const score=Number.isFinite(Number(rating?.score))
+  ?Math.round(Number(rating.score))+"/100":"N/D";
  return `
  <div class="marketCard">
   <div>
    ${escapeHtml(label)}
-   <small>${level?"Qualità campione: "+escapeHtml(level):"Stima Poisson"}</small>
+   <small>${rating?"Qualità dati: "+escapeHtml(level)+" · Rating "+escapeHtml(score):"Stima Poisson"}</small>
   </div>
   <strong>${formatPercent(value)}</strong>
  </div>`;
