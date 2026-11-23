@@ -2012,12 +2012,69 @@ app.get(
             btts_yes: actualBtts
           },
           probabilities: p,
-          probabilities: p
+          expected_goals: prediction.expected_goals || null,
+          exact_scores: prediction.exact_scores || []
         });
       }
 
       const evaluated = results.length;
       const correct = results.filter(result => result.correct_1x2).length;
+
+      // Metriche avanzate di valutazione del modello.
+      const EPSILON = 1e-6;
+      let totalLogLoss = 0;
+      let homeGoalAbsoluteError = 0;
+      let awayGoalAbsoluteError = 0;
+      let homeGoalSquaredError = 0;
+      let awayGoalSquaredError = 0;
+      let exactScoreTop1Hits = 0;
+      let exactScoreEvaluated = 0;
+      let expectedGoalsEvaluated = 0;
+
+      for (const result of results) {
+        const actualOutcome = result.actual_result;
+        const rawProbability = Number(result.probabilities?.[actualOutcome]) / 100;
+        const outcomeProbability = Math.max(EPSILON, Math.min(1, rawProbability));
+        totalLogLoss += -Math.log(outcomeProbability);
+
+        const expectedHome = getNumber(result.expected_goals?.home);
+        const expectedAway = getNumber(result.expected_goals?.away);
+        const [actualHome, actualAway] = result.actual_score.split("-").map(Number);
+        if (expectedHome !== null && expectedAway !== null &&
+            Number.isFinite(actualHome) && Number.isFinite(actualAway)) {
+          expectedGoalsEvaluated++;
+          const homeError = expectedHome - actualHome;
+          const awayError = expectedAway - actualAway;
+          homeGoalAbsoluteError += Math.abs(homeError);
+          awayGoalAbsoluteError += Math.abs(awayError);
+          homeGoalSquaredError += homeError * homeError;
+          awayGoalSquaredError += awayError * awayError;
+        }
+
+        if (Array.isArray(result.exact_scores) && result.exact_scores.length) {
+          exactScoreEvaluated++;
+          if (result.exact_scores[0]?.score === result.actual_score) exactScoreTop1Hits++;
+        }
+      }
+
+      const advancedMetrics = {
+        "1X2": {
+          log_loss: evaluated ? Number((totalLogLoss / evaluated).toFixed(4)) : null,
+          lower_is_better: true
+        },
+        expected_goals_error: {
+          evaluated: expectedGoalsEvaluated,
+          home_mae: expectedGoalsEvaluated ? Number((homeGoalAbsoluteError / expectedGoalsEvaluated).toFixed(3)) : null,
+          away_mae: expectedGoalsEvaluated ? Number((awayGoalAbsoluteError / expectedGoalsEvaluated).toFixed(3)) : null,
+          home_rmse: expectedGoalsEvaluated ? Number(Math.sqrt(homeGoalSquaredError / expectedGoalsEvaluated).toFixed(3)) : null,
+          away_rmse: expectedGoalsEvaluated ? Number(Math.sqrt(awayGoalSquaredError / expectedGoalsEvaluated).toFixed(3)) : null
+        },
+        exact_score_top_1: {
+          evaluated: exactScoreEvaluated,
+          top_1_correct: exactScoreTop1Hits,
+          top_1_accuracy: exactScoreEvaluated ? Number((exactScoreTop1Hits / exactScoreEvaluated * 100).toFixed(2)) : null
+        }
+      };
 
       // Fasce di calibrazione: confrontano probabilita' media e frequenza reale.
       function calibrationByBands(tested) {
@@ -2204,6 +2261,7 @@ app.get(
         },
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
+        advanced_metrics: advancedMetrics,
         model: "Poisson con shrinkage bayesiano",
         results
       });
