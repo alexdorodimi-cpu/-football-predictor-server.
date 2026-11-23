@@ -508,6 +508,92 @@ function buildGoalModel(homeLambda, awayLambda) {
   return matrix;
 }
 
+// Simulazione Monte Carlo: estrae risultati dalla distribuzione Poisson
+// gia' costruita dal modello. Le probabilita' analitiche restano il riferimento.
+function runMonteCarlo(matrix, iterations = 10000) {
+  const cumulative = [];
+  let cumulativeProbability = 0;
+
+  for (const item of matrix) {
+    cumulativeProbability += item.probability;
+    cumulative.push({
+      home: item.home,
+      away: item.away,
+      cumulative: cumulativeProbability
+    });
+  }
+
+  const counts = {
+    home_win: 0,
+    draw: 0,
+    away_win: 0,
+    over_1_5: 0,
+    under_1_5: 0,
+    over_2_5: 0,
+    under_2_5: 0,
+    over_3_5: 0,
+    under_3_5: 0,
+    btts_yes: 0,
+    btts_no: 0
+  };
+  const scoreCounts = new Map();
+
+  for (let i = 0; i < iterations; i++) {
+    const random = Math.random();
+    let result = cumulative[cumulative.length - 1];
+
+    for (const candidate of cumulative) {
+      if (random <= candidate.cumulative) {
+        result = candidate;
+        break;
+      }
+    }
+
+    const totalGoals = result.home + result.away;
+    const score = `${result.home}-${result.away}`;
+
+    if (result.home > result.away) counts.home_win++;
+    else if (result.home === result.away) counts.draw++;
+    else counts.away_win++;
+
+    if (totalGoals >= 2) counts.over_1_5++;
+    else counts.under_1_5++;
+
+    if (totalGoals >= 3) counts.over_2_5++;
+    else counts.under_2_5++;
+
+    if (totalGoals >= 4) counts.over_3_5++;
+    else counts.under_3_5++;
+
+    if (result.home > 0 && result.away > 0) counts.btts_yes++;
+    else counts.btts_no++;
+
+    scoreCounts.set(score, (scoreCounts.get(score) || 0) + 1);
+  }
+
+  const simulatedProbabilities = Object.fromEntries(
+    Object.entries(counts).map(([key, count]) => [
+      key,
+      percent(count / iterations)
+    ])
+  );
+
+  const topExactScores = [...scoreCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([score, count]) => ({
+      score,
+      probability: percent(count / iterations)
+    }));
+
+  return {
+    iterations,
+    method: "Monte Carlo su distribuzione Poisson",
+    probabilities: simulatedProbabilities,
+    top_exact_scores: topExactScores
+  };
+}
+
 function percent(value) {
   return Number((value * 100).toFixed(1));
 }
@@ -814,6 +900,9 @@ function calculatePrediction(fixture, history) {
   // Matrice delle probabilità Poisson.
   const matrix = buildGoalModel(homeLambda, awayLambda);
 
+  // 10.000 simulazioni automatiche per ogni partita.
+  const monteCarlo = runMonteCarlo(matrix, 10000);
+
   const sum = fn =>
     matrix
       .filter(fn)
@@ -887,6 +976,7 @@ function calculatePrediction(fixture, history) {
     },
 
     probabilities,
+    monte_carlo: monteCarlo,
     reliability,
 
     samples: {
