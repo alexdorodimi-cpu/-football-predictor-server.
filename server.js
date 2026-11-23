@@ -1995,7 +1995,8 @@ app.get(
             over_3_5: actualOver35,
             btts_yes: actualBtts
           },
-          probabilities: p
+          probabilities: p,
+          poisson_probabilities: prediction.poisson_probabilities || null
         });
       }
 
@@ -2087,19 +2088,89 @@ app.get(
         ? Number((multiclassBrier / (evaluated * 3)).toFixed(4))
         : null;
 
-      const accuracyByMarket = {
-        "1X2": {
-          evaluated,
-          correct,
-          accuracy: evaluated ? Number((correct / evaluated * 100).toFixed(2)) : null,
-          brier_score_normalized: brier1x2,
-          calibration_by_outcome: outcomeCalibration
-        },
-        over_1_5: marketMetrics("over_1_5", "over_1_5"),
-        over_2_5: marketMetrics("over_2_5", "over_2_5"),
-        over_3_5: marketMetrics("over_3_5", "over_3_5"),
-        btts_yes: marketMetrics("btts_yes", "btts_yes")
-      };
+      function buildModelMetrics(probabilityField) {
+        const probabilityFor = result => result[probabilityField] || {};
+        const testedResults = results.filter(result => {
+          const probabilities = probabilityFor(result);
+          return ["1", "X", "2"].every(key =>
+            Number.isFinite(Number(probabilities[key]))
+          );
+        });
+
+        let multiclassBrier = 0;
+        let correct1x2 = 0;
+        const outcomeCalibrationByModel = {};
+
+        for (const outcome of ["1", "X", "2"]) {
+          const tested = testedResults.map(result => ({
+            probability: Number(probabilityFor(result)[outcome]) / 100,
+            actual: result.actual_result === outcome ? 1 : 0
+          }));
+          outcomeCalibrationByModel[outcome] = calibrationByBands(tested);
+          for (const item of tested) {
+            multiclassBrier += Math.pow(item.probability - item.actual, 2);
+          }
+        }
+
+        for (const result of testedResults) {
+          const probabilities = probabilityFor(result);
+          const predicted = ["1", "X", "2"].sort(
+            (a, b) => Number(probabilities[b]) - Number(probabilities[a])
+          )[0];
+          if (predicted === result.actual_result) correct1x2++;
+        }
+
+        const count = testedResults.length;
+        const marketMetricsForModel = (key, actualKey) => {
+          const tested = results
+            .filter(result =>
+              Number.isFinite(Number(probabilityFor(result)[key])) &&
+              typeof result.actual_markets?.[actualKey] === "boolean"
+            )
+            .map(result => ({
+              probability: Number(probabilityFor(result)[key]) / 100,
+              actual: result.actual_markets[actualKey] ? 1 : 0
+            }));
+
+          if (!tested.length) {
+            return { evaluated: 0, correct: 0, accuracy: null, brier_score: null, calibration: [] };
+          }
+
+          let hits = 0;
+          let brier = 0;
+          for (const item of tested) {
+            if ((item.probability >= 0.5) === Boolean(item.actual)) hits++;
+            brier += Math.pow(item.probability - item.actual, 2);
+          }
+          return {
+            evaluated: tested.length,
+            correct: hits,
+            accuracy: Number((hits / tested.length * 100).toFixed(2)),
+            brier_score: Number((brier / tested.length).toFixed(4)),
+            calibration: calibrationByBands(tested)
+          };
+        };
+
+        return {
+          "1X2": {
+            evaluated: count,
+            correct: correct1x2,
+            accuracy: count ? Number((correct1x2 / count * 100).toFixed(2)) : null,
+            brier_score_normalized: count
+              ? Number((multiclassBrier / (count * 3)).toFixed(4))
+              : null,
+            calibration_by_outcome: outcomeCalibrationByModel
+          },
+          over_1_5: marketMetricsForModel("over_1_5", "over_1_5"),
+          over_2_5: marketMetricsForModel("over_2_5", "over_2_5"),
+          over_3_5: marketMetricsForModel("over_3_5", "over_3_5"),
+          btts_yes: marketMetricsForModel("btts_yes", "btts_yes")
+        };
+      }
+
+      const hybridMetrics = buildModelMetrics("probabilities");
+      const poissonMetrics = buildModelMetrics("poisson_probabilities");
+      const accuracyByMarket = hybridMetrics;
 
       res.json({
         ok: true,
@@ -2118,6 +2189,30 @@ app.get(
         },
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
+        model_comparison: {
+          evaluation_basis: "Stesse partite e stessi risultati reali per entrambi i modelli",
+          hybrid: hybridMetrics,
+          poisson: poissonMetrics,
+          better_by_brier_score: Object.fromEntries(
+            ["1X2", "over_1_5", "over_2_5", "over_3_5", "btts_yes"].map(market => {
+              const hybridBrier = market === "1X2"
+                ? hybridMetrics[market].brier_score_normalized
+                : hybridMetrics[market].brier_score;
+              const poissonBrier = market === "1X2"
+                ? poissonMetrics[market].brier_score_normalized
+                : poissonMetrics[market].brier_score;
+              return [market,
+                hybridBrier === null || poissonBrier === null
+                  ? "DATI_INSUFFICIENTI"
+                  : hybridBrier < poissonBrier
+                    ? "HYBRID"
+                    : poissonBrier < hybridBrier
+                      ? "POISSON"
+                      : "PARI"
+              ];
+            })
+          )
+        },
         results
       });
     } catch (error) {
