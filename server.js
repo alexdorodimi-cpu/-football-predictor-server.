@@ -758,17 +758,20 @@ async function runStatsMonteCarlo(fixture, history, iterations = 10000) {
 
 function getReliability(probability, sampleSize) {
   // La probabilita prevista non misura l'affidabilita del modello.
-  // Il livello descrive solo l'ampiezza del campione disponibile.
+  // Il punteggio e il livello usano la stessa scala basata sulla numerosita
+  // del campione: 30 o piu' partite raggiungono il massimo.
+  const safeSampleSize = Math.max(0, Number(sampleSize) || 0);
+  const score = Number(Math.max(0, Math.min(100, safeSampleSize / 30 * 100)).toFixed(1));
   const level =
-    sampleSize >= 30 ? "ALTA" :
-    sampleSize >= 10 ? "MODERATA" :
-    "LIMITATA";
+    score >= 75 ? "ALTA" :
+    score >= 60 ? "MEDIA" :
+    "BASSA";
 
   return {
-    score: Number(Math.max(0, Math.min(100, sampleSize / 30 * 100)).toFixed(1)),
+    score,
     level,
-    sample_size: sampleSize,
-    note: "Qualita del campione, non probabilita di successo."
+    sample_size: safeSampleSize,
+    note: "Indicatore della numerosita del campione, non probabilita di successo ne calibrazione del modello."
   };
 }
 
@@ -1155,6 +1158,26 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
     model_inputs: {
       league_home_goals_average: Number(leagueHomeAverage.toFixed(2)),
       league_away_goals_average: Number(leagueAwayAverage.toFixed(2)),
+      team_weighted_averages: {
+        home_scored: Number(homeFor.toFixed(3)),
+        home_conceded: Number(homeAgainst.toFixed(3)),
+        away_scored: Number(awayFor.toFixed(3)),
+        away_conceded: Number(awayAgainst.toFixed(3))
+      },
+      venue_weighted_averages: {
+        home_scored_at_home: Number(weightedAverage(homeVenueSample, "scored").toFixed(3)),
+        home_conceded_at_home: Number(weightedAverage(homeVenueSample, "conceded").toFixed(3)),
+        away_scored_away: Number(weightedAverage(awayVenueSample, "scored").toFixed(3)),
+        away_conceded_away: Number(weightedAverage(awayVenueSample, "conceded").toFixed(3))
+      },
+      lambda_components: {
+        overall_home: Number(overallHomeLambda.toFixed(3)),
+        venue_home: Number(venueHomeLambda.toFixed(3)),
+        overall_away: Number(overallAwayLambda.toFixed(3)),
+        venue_away: Number(venueAwayLambda.toFixed(3)),
+        overall_weight: 0.3,
+        venue_weight: 0.7
+      },
       venue_split_used: homeVenueReady && awayVenueReady,
       lineup_form_adjustment: lineupImpact || { applied: false, reason: "Non disponibile" }
     },
