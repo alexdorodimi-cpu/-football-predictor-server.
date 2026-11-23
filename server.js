@@ -1523,7 +1523,7 @@ app.get(
         ? String(req.query.date).trim()
         : null;
 
-      if (targetDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(targetDate)) {
+      if (targetDate && !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
         return res.status(400).json({
           ok: false,
           error: "Data non valida. Usa il formato YYYY-MM-DD."
