@@ -42,3 +42,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Import all available historical match statistics
         run: node scripts/import-historical-statistics.js
+      - name: Backtest all available statistical markets in resumable batches
+        env:
+          BACKTEST_BATCH_SIZE: "100"
+        run: node scripts/complete-statistical-backtest.js
