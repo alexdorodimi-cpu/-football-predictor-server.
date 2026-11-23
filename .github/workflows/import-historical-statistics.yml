@@ -1,12 +1,11 @@
 name: Football Predictor historical statistics import
 
 on:
-  push:
+  # Avvia le statistiche solo dopo il completamento riuscito dello storico.
+  workflow_run:
+    workflows: ["Football Predictor historical data import"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "scripts/import-historical-statistics.js"
-      - ".github/workflows/import-historical-statistics.yml"
-      - "server.js"
   workflow_dispatch:
     inputs:
       league_id:
@@ -29,6 +28,7 @@ permissions:
 
 jobs:
   import-statistics:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:

@@ -338,15 +338,27 @@ function getAwayScore(match) {
 function isFinished(match) {
   const status = String(
     match.status || ""
-  ).toUpperCase();
+  ).trim().toUpperCase();
 
-  return [
+  if ([
     "FT",
     "AET",
     "PENS",
     "FINISHED",
-    "COMPLETED"
-  ].includes(status);
+    "COMPLETED",
+    "PLAYED"
+  ].includes(status)) {
+    return true;
+  }
+
+  // Alcune risposte PitchAPI indicano le gare concluse come "played"
+  // o non forniscono un codice stato standard: il risultato completo
+  // e una data passata costituiscono un fallback affidabile.
+  const date = match.match_date || match.time_utc || match.date || match.datetime;
+  return getHomeScore(match) !== null &&
+    getAwayScore(match) !== null &&
+    date &&
+    new Date(date).getTime() <= Date.now();
 }
 
 // ==========================================
@@ -403,11 +415,12 @@ app.post(
 // NORMALIZZAZIONE PARTITE
 // ==========================================
 
-function normalizeFixture(match, seasonOverride) {
+function normalizeFixture(match, seasonOverride, leagueIdOverride) {
   const leagueId =
     match.league_id ??
     match.league?.id ??
-    match.competition?.id;
+    match.competition?.id ??
+    leagueIdOverride;
 
   // PitchAPI utilizza time_utc
   const date =
@@ -471,7 +484,8 @@ function normalizeFixture(match, seasonOverride) {
 
 async function saveMatchesToDatabase(
   matches,
-  seasonOverride
+  seasonOverride,
+  leagueIdOverride
 ) {
   if (!supabase) {
     throw new Error("Supabase non configurato.");
@@ -489,7 +503,7 @@ async function saveMatchesToDatabase(
       getAwayName(match)
     )
     .map(match =>
-      normalizeFixture(match, seasonOverride)
+      normalizeFixture(match, seasonOverride, leagueIdOverride)
     )
     .filter(match =>
       match.id &&
@@ -1667,7 +1681,7 @@ app.post(
           `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=played`
         );
         const matches = getMatches(body);
-        const saved = await saveMatchesToDatabase(matches, season);
+        const saved = await saveMatchesToDatabase(matches, season, leagueId);
         receivedMatches += matches.length;
         savedMatches += saved;
         seasonReports.push({
