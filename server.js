@@ -1680,7 +1680,7 @@ app.get(
         });
       }
 
-      if (season && !/^\\d{4}\\/\\d{4}$/.test(season)) {
+      if (season && !/^\d{4}\/\d{4}$/.test(season)) {
         return res.status(400).json({
           ok: false,
           error: "Stagione non valida. Usa il formato YYYY/YYYY."
