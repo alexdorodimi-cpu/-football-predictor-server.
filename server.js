@@ -1206,7 +1206,8 @@ function calculatePrediction(fixture, history) {
     awayAgainst,
     20000
   );
-  // Poisson resta il modello principale; l’ibrido rimane sperimentale.\n  const probabilities = poissonProbabilities;
+  // Poisson resta il modello principale; l’ibrido rimane sperimentale.
+  const probabilities = poissonProbabilities;
 
   // Affidabilità indicativa dei mercati.
   const reliability = {};
@@ -1231,7 +1232,8 @@ function calculatePrediction(fixture, history) {
   return {
     ok: true,
 
-    model: "Poisson ponderato con rendimento casa/trasferta (modello principale)",\n    experimental_model: "Hybrid Poisson + Monte Carlo con bootstrap statistico",
+    model: "Poisson ponderato con rendimento casa/trasferta (modello principale)",
+    experimental_model: "Hybrid Poisson + Monte Carlo con bootstrap statistico",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
