@@ -15,6 +15,8 @@ async function main() {
   const url = new URL(`${baseUrl}/api/backtest/${encodeURIComponent(leagueId)}`);
   url.searchParams.set("season", season);
   url.searchParams.set("limit", String(limit));
+  url.searchParams.set("include_stats", "true");
+  url.searchParams.set("stats_limit", "10");
 
   const headers = { Accept: "application/json" };
   if (process.env.PREDICTOR_ACCESS_TOKEN) {
@@ -192,6 +194,8 @@ async function main() {
     markets: reportMarkets,
     threshold_optimization: thresholdOptimization,
     optimization_split: { training_matches: training.length, untouched_holdout_matches: holdout.length, chronological: true },
+    statistical_markets: data.statistical_accuracy_by_market || null,
+    statistical_backtest: data.statistical_backtest || null,
     advanced_metrics: data.advanced_metrics || null
   };
 
