@@ -2050,6 +2050,7 @@ app.get(
         },
 
         samples: prediction.samples,
+        model_inputs: prediction.model_inputs,
         expected_goals: prediction.expected_goals,
         probabilities: prediction.probabilities,
         monte_carlo: prediction.monte_carlo,
