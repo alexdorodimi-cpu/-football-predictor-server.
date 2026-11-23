@@ -10,6 +10,28 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use(express.json({ limit: "20kb" }));
 
+app.use((req, res, next) => {
+  const origin = req.get("origin") || "";
+  const allowedOrigins = new Set([
+    "https://hoppscotch.io",
+    "https://www.hoppscotch.io"
+  ]);
+
+  if (allowedOrigins.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,Accept");
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
+
 const PORT = process.env.PORT || 10000;
 const PITCHAPI_URL = "https://api.pitchapi.dev/v1";
 const PITCHAPI_KEY = String(process.env.PITCHAPI_KEY || "").trim();
