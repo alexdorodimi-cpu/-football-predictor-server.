@@ -2623,34 +2623,42 @@ function parseSisalOddsPdfText(text) {
   const events = [];
   let candidateLines = 0;
   let rejectedRows = 0;
+  const sampleLines = [];
   for (const rawLine of lines) {
     const line = String(rawLine).replace(/\s+/g, " ").trim();
     if (!line) continue;
     const normalizedLine = normalizeSisalText(line);
     const dateHeading = normalizedLine.match(/^(?:(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)[,]?\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/i);
-    if (dateHeading) { currentDateLabel = dateHeading[1].padStart(2,"0") + "/" + monthNames[normalizeSisalText(dateHeading[2])]; continue; }
+    if (dateHeading) { currentDateLabel = dateHeading[1].padStart(2,"0") + "/" + monthNames[dateHeading[2]]; continue; }
     const prefix = line.match(/^(\d{1,2}\.\d{2})\s+([A-Z0-9]{2,8})\s+(\d{3,6})\s+(\d{2,7})\s+(.+)$/i);
     if (!prefix) continue;
     candidateLines++;
+    if (sampleLines.length < 5) sampleLines.push(line.slice(0, 240));
     const tokens = prefix[5].split(" ");
-    if (tokens.length < SISAL_ODDS_COLUMNS.length + 2) { rejectedRows++; continue; }
-    const rawOdds = tokens.slice(-SISAL_ODDS_COLUMNS.length);
-    const odds = rawOdds.map((token, index) => {
+    const isOddsToken = token => token === "-" || /^-?\d+(?:,\d{1,2})?$/.test(token);
+    let oddsStart = tokens.length;
+    while (oddsStart > 0 && isOddsToken(tokens[oddsStart - 1]) && tokens.length - oddsStart < 22) oddsStart--;
+    const oddsTokens = tokens.slice(oddsStart);
+    const teamText = tokens.slice(0, oddsStart).join(" ").trim();
+    if (oddsTokens.length < 18 || oddsTokens.length > 22 || !teamText) { rejectedRows++; continue; }
+    const parseOdd = token => {
       if (token === "-") return null;
-      if (index === 3 && /^-?\d+(?:,\d+)?$/.test(token)) return Number(token.replace(",", "."));
-      if (!/^\d+(?:,\d+)?$/.test(token)) return undefined;
       const value = Number(token.replace(",", "."));
-      return Number.isFinite(value) && value > 1 && value <= 1000 ? value : undefined;
+      return Number.isFinite(value) && value > 1 && value <= 1000 ? value : null;
+    };
+    const odds = oddsTokens.map(parseOdd);
+    if (odds.slice(0,3).some(value => value === null)) { rejectedRows++; continue; }
+    events.push({
+      date_label: currentDateLabel, time: prefix[1], competition_code: prefix[2],
+      schedule_id: prefix[3], event_id: prefix[4], home_team_text: teamText,
+      team_text: teamText, markets: { "1": odds[0], "X": odds[1], "2": odds[2] },
+      parsed_odds_columns: oddsTokens.length
     });
-    if (odds.some(value => value === undefined)) { rejectedRows++; continue; }
-    const middle = tokens.slice(0, -SISAL_ODDS_COLUMNS.length).filter(token => token.toUpperCase() !== "L");
-    const teamText = middle.join(" ").trim();
-    if (middle.length < 2 || !teamText) { rejectedRows++; continue; }
-    const markets = {};
-    SISAL_ODDS_COLUMNS.forEach((key, index) => { markets[key] = odds[index]; });
-    events.push({ date_label: currentDateLabel, time: prefix[1], competition_code: prefix[2], schedule_id: prefix[3], event_id: prefix[4], team_text: teamText, markets });
   }
-  return { updated_at: updatedAt, events, diagnostics: { text_lines: lines.length, candidate_event_lines: candidateLines, parsed_events: events.length, rejected_candidate_lines: rejectedRows, sample_lines: lines.filter(line => /^\s*\d{1,2}\.\d{2}\s+[A-Z0-9]{2,8}\s+\d{3,6}\s+\d{2,7}/i.test(line)).slice(0,5) } };
+  return { updated_at: updatedAt, events, diagnostics: {
+    text_lines: lines.length, candidate_event_lines: candidateLines,
+    parsed_events: events.length, rejected_candidate_lines: rejectedRows, sample_lines: sampleLines
+  } };
 }
 
 function findSisalEventForFixture(events, fixture) {
