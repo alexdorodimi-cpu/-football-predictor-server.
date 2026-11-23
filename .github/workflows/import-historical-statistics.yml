@@ -1,6 +1,7 @@
 name: Football Predictor historical statistics import
 
 on:
+  # Sequenza: lo storico deve terminare prima dell'importazione delle statistiche.
   # Avvia le statistiche solo dopo il completamento riuscito dello storico.
   workflow_run:
     workflows: ["Football Predictor historical data import"]
