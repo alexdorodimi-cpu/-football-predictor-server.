@@ -350,6 +350,49 @@ function isFinished(match) {
 }
 
 // ==========================================
+// IMPORTAZIONE STATISTICHE STORICHE A BLOCCHI
+// ==========================================
+app.post(
+  "/api/sync/league/:id/statistics",
+  requireSportApi,
+  requireDatabase,
+  async (req, res) => {
+    try {
+      const leagueId = String(req.params.id);
+      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
+        return res.status(400).json({ ok: false, error: "ID campionato non valido." });
+      }
+      const offset = Math.max(0, Number.parseInt(req.query.offset || "0", 10) || 0);
+      const batchSize = Math.min(100, Math.max(1, Number.parseInt(req.query.batch_size || "50", 10) || 50));
+      const { data: matches, error: matchesError } = await supabase
+        .from("matches").select("id,league_id,match_date")
+        .eq("league_id", leagueId).not("match_date", "is", null)
+        .order("match_date", { ascending: true }).range(offset, offset + batchSize - 1);
+      if (matchesError) throw matchesError;
+      const rows = await mapWithConcurrency(matches || [], 5, async match => {
+        try {
+          const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
+          return { match_id: String(match.id), league_id: leagueId, match_date: match.match_date,
+            stats: getNormalizedMatchStats(body), updated_at: new Date().toISOString() };
+        } catch (error) {
+          return { match_id: String(match.id), error: error.message };
+        }
+      });
+      const successful = rows.filter(row => row && row.stats);
+      if (successful.length) {
+        const { error } = await supabase.from("match_statistics").upsert(successful, { onConflict: "match_id" });
+        if (error) throw error;
+      }
+      const failures = rows.filter(row => row?.error).map(row => ({ match_id: row.match_id, error: row.error }));
+      res.json({ ok: true, league_id: leagueId, offset, batch_size: batchSize,
+        matches_selected: (matches || []).length, statistics_saved: successful.length,
+        failed: failures.length, failures, next_offset: offset + (matches || []).length,
+        done: (matches || []).length < batchSize });
+    } catch (error) { handleError(res, error); }
+  }
+);
+
+// ==========================================
 // NORMALIZZAZIONE PARTITE
 // ==========================================
 
@@ -1159,11 +1202,30 @@ async function buildHistoricalStatForecast(fixture, history) {
   ).slice(0, 10);
   const homeMatches = selectTeam(homeName), awayMatches = selectTeam(awayName);
   const unique = [...new Map([...homeMatches, ...awayMatches].filter(m => m.id).map(m => [String(m.id), m])).values()];
-  const fetched = await mapWithConcurrency(unique, 5, async match => {
+  let persistedStats = [];
+  if (supabase && unique.length) {
+    const { data, error } = await supabase
+      .from("match_statistics")
+      .select("match_id,stats")
+      .in("match_id", unique.map(match => String(match.id)));
+    if (error) throw error;
+    persistedStats = data || [];
+  }
+  const statsById = new Map(persistedStats.map(row => [String(row.match_id), row.stats]));
+  const missingStats = unique.filter(match => !statsById.has(String(match.id)));
+  const fetched = await mapWithConcurrency(missingStats, 5, async match => {
     const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
-    return { id: String(match.id), stats: getNormalizedMatchStats(body) };
+    return { id: String(match.id), league_id: String(match.league_id || fixture.league_id), match_date: match.match_date || match.date || null, stats: getNormalizedMatchStats(body) };
   });
-  const statsById = new Map(fetched.filter(x => x && !x.error).map(x => [x.id, x.stats]));
+  const successfulFetches = fetched.filter(item => item && !item.error);
+  for (const item of successfulFetches) statsById.set(item.id, item.stats);
+  if (supabase && successfulFetches.length) {
+    const { error } = await supabase.from("match_statistics").upsert(
+      successfulFetches.map(item => ({ match_id: item.id, league_id: item.league_id, match_date: item.match_date, stats: item.stats, updated_at: new Date().toISOString() })),
+      { onConflict: "match_id" }
+    );
+    if (error) console.error("Persistenza statistiche storiche:", error.message);
+  }
   const fields = ["corners", "total_shots", "shots_on_target", "shots_off_target", "blocked_shots",
     "yellow_cards", "red_cards", "fouls", "offsides", "possession", "expected_goals",
     "saves", "passes", "accurate_passes", "tackles", "big_chances", "big_chances_missed",
