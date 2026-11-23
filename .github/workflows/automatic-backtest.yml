@@ -1,6 +1,9 @@
 name: Football Predictor automatic backtest
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "20 7 * * *"
   workflow_dispatch:
