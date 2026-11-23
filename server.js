@@ -2624,7 +2624,7 @@ function parseSisalOddsPdfText(text) {
   let candidateLines = 0;
   let rejectedRows = 0;
   const sampleLines = [];
-  const previewLines = lines.map(line => String(line).replace(/\\s+/g, " ").trim()).filter(Boolean).slice(0, 20);
+  const previewLines = lines.map(line => String(line).replace(/\\s+/g, " ").trim()).filter(Boolean).slice(18, 68);
   for (const rawLine of lines) {
     const line = String(rawLine).replace(/\s+/g, " ").trim();
     if (!line) continue;
