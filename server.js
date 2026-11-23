@@ -2567,42 +2567,12 @@ app.get(
             `/matches/${encodeURIComponent(match.id)}/stats`
           );
 
-          const periods =
-            statsResponse?.data?.periods ||
-            statsResponse?.response?.data?.periods ||
-            statsResponse?.periods ||
-            [];
-
-          const allPeriod = periods.find(
-            period =>
-              String(period.period).toLowerCase() === "all"
-          );
-
-          if (!allPeriod) {
-            statsMatchesFailed++;
-            continue;
-          }
-
-          const items = allPeriod.groups
-            ?.flatMap(group => group.items || []) || [];
-
+          const normalizedStats = getNormalizedMatchStats(statsResponse);
           const values = {};
-
-          for (const [field, apiKey] of Object.entries(statKeys)) {
-            const item = items.find(
-              stat => stat.key === apiKey
-            );
-
-            if (!item) {
-              values[field] = null;
-              continue;
-            }
-
-            const rawValue = isHome
-              ? item.home
-              : item.away;
-
-            values[field] = getNumber(rawValue);
+          for (const field of Object.keys(statKeys)) {
+            values[field] = normalizedStats[field]
+              ? normalizedStats[field][isHome ? "home" : "away"]
+              : null;
           }
 
           let foundStats = false;
