@@ -507,7 +507,10 @@ function makeStat(label,homeValue,awayValue){
    <span>${displayValue(homeValue)}</span>
    <span>${displayValue(awayValue)}</span>
   </div>
-  <div class="statName">${label}</div>
+  <div class="statName">
+   ${escapeHtml(label)}
+   <small>${escapeHtml(homeLabel)} · ${escapeHtml(awayLabel)}</small>
+  </div>
   <div class="barBackground">
    <div class="barHome" style="width:${homeWidth}%"></div>
    <div class="barAway" style="width:${awayWidth}%"></div>
