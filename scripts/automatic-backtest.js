@@ -2,7 +2,7 @@ const fs = require("node:fs");
 
 const baseUrl = String(process.env.BASE_URL || "").replace(/\/$/, "");
 const leagueId = process.env.LEAGUE_ID || "l_0ALvwF";
-const season = process.env.SEASON || "2026/2027";
+const season = String(process.env.SEASON || "").trim();
 const limit = Math.min(Math.max(Number(process.env.BACKTEST_LIMIT) || 300, 1), 300);
 const targetAccuracy = Number(process.env.TARGET_ACCURACY || 60);
 const minimumEvaluated = Number(process.env.MIN_EVALUATED || 30);
@@ -13,7 +13,7 @@ if (!baseUrl) {
 
 async function main() {
   const url = new URL(`${baseUrl}/api/backtest/${encodeURIComponent(leagueId)}`);
-  url.searchParams.set("season", season);
+  if (season) url.searchParams.set("season", season);
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("include_stats", "true");
   url.searchParams.set("stats_limit", "10");
@@ -180,7 +180,7 @@ async function main() {
   const report = {
     generated_at: new Date().toISOString(),
     league_id: leagueId,
-    season,
+    season: season || data.season || "Tutte le stagioni disponibili",
     model: data.model || null,
     requested_matches: data.requested_matches ?? limit,
     evaluated_matches: data.evaluated_matches ?? null,
