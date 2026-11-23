@@ -1749,12 +1749,29 @@ async function getFixturePlayerForm(fixture, history) {
     };
     if (!starters.length) continue;
 
+    // Preferisci gli ID squadra (piu' affidabili dei nomi); usa il nome
+    // normalizzato solo quando l'ID non e' presente nello storico.
+    const currentTeamId = side.key === "home"
+      ? (fixture.home_team_id || getHomeId(fixture))
+      : (fixture.away_team_id || getAwayId(fixture));
+    const normalizedTeamName = String(side.teamName || "")
+      .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
+      .trim().toLowerCase().replace(/\\s+/g, " ");
+
     const teamMatches = (history || [])
       .filter(match => {
         const date = match.match_date || match.date;
-        const sameTeam =
-          String(match.home_team || "").toLowerCase() === String(side.teamName || "").toLowerCase() ||
-          String(match.away_team || "").toLowerCase() === String(side.teamName || "").toLowerCase();
+        const homeId = match.home_team_id || getHomeId(match);
+        const awayId = match.away_team_id || getAwayId(match);
+        const hasComparableIds = currentTeamId && (homeId || awayId);
+        const sameTeam = hasComparableIds
+          ? String(homeId || "") === String(currentTeamId) ||
+            String(awayId || "") === String(currentTeamId)
+          : [match.home_team, match.away_team].some(name =>
+              String(name || "").normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .trim().toLowerCase().replace(/\\s+/g, " ") === normalizedTeamName
+            );
         return date && new Date(date) < beforeDate && isFinished(match) && sameTeam && match.id;
       })
       .sort((a, b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date))
@@ -1810,6 +1827,7 @@ async function getFixturePlayerForm(fixture, history) {
         ])
       );
       output.players[side.key].push({
+        team: side.teamName,
         player_id: id || null,
         name: player.name || null,
         shirt_number: player.shirt_number || null,
