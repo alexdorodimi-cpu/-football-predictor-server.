@@ -354,6 +354,16 @@ button.full{width:100%}
   <p id="message" class="status">● Pronto per caricare le partite.</p>
  </div>
 
+ <div class="panel">
+  <div class="panel-heading">
+   <h2>🧪 Backtest storico</h2>
+   <small>Verifica previsioni passate</small>
+  </div>
+  <p class="muted">Confronta le previsioni ricostruite con i risultati reali del 22 novembre 2026. Usa il token già salvato nell'app.</p>
+  <button class="full" onclick="runDailyBacktest()">TEST PARTITE DEL 22/11/2026</button>
+  <pre id="backtestResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
+ </div>
+
  <div class="section-heading">
   <h2>📅 Partite</h2>
   <span class="muted" id="dateLabel"></span>
@@ -685,6 +695,24 @@ function renderAnalysis(home,away,homeStats,awayStats,prediction,predictionError
  </div>`;
 
  content.innerHTML=html;
+}
+
+async function runDailyBacktest(){
+ const leagueId=document.getElementById("league").value;
+ const output=document.getElementById("backtestResult");
+ if(!leagueId||leagueId==="all"){
+  output.textContent="Seleziona prima Serie A nel campo Campionato.";
+  return;
+ }
+ output.textContent="Backtest in corso...";
+ try{
+  const url="/api/backtest/"+encodeURIComponent(leagueId)+
+   "?date=2026-11-22&season=2026%2F2027&limit=300";
+  const result=await api(url);
+  output.textContent=JSON.stringify(result,null,2);
+ }catch(error){
+  output.textContent="Errore backtest: "+error.message;
+ }
 }
 
 async function loadMatches(){
