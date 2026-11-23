@@ -33,13 +33,33 @@ async function main() {
   }
 
   const source = data.accuracy_by_market;
-  const markets = {
-    "1X2": source["1X2"],
-    "Over 1.5": source.over_1_5,
-    "Over 2.5": source.over_2_5,
-    "Over 3.5": source.over_3_5,
-    "BTTS": source.btts_yes
+  const marketLabels = {
+    "1X2": "1X2",
+    over_0_5: "Over 0.5", under_0_5: "Under 0.5",
+    over_1_5: "Over 1.5", over_2_5: "Over 2.5", over_3_5: "Over 3.5",
+    under_1_5: "Under 1.5", under_2_5: "Under 2.5", under_3_5: "Under 3.5",
+    over_4_5: "Over 4.5", under_4_5: "Under 4.5",
+    btts_yes: "Goal", btts_no: "No Goal",
+    double_chance_1x: "Doppia chance 1X",
+    double_chance_x2: "Doppia chance X2",
+    double_chance_12: "Doppia chance 12",
+    multigoal_1_2: "Multigol 1-2", multigoal_1_3: "Multigol 1-3",
+    multigoal_1_4: "Multigol 1-4", multigoal_2_3: "Multigol 2-3",
+    multigoal_2_4: "Multigol 2-4", multigoal_2_5: "Multigol 2-5",
+    multigoal_3_4: "Multigol 3-4",
+    combo_1x_over_1_5: "1X + Over 1.5",
+    combo_1x_under_2_5: "1X + Under 2.5",
+    combo_x2_over_1_5: "X2 + Over 1.5",
+    combo_x2_under_2_5: "X2 + Under 2.5",
+    combo_12_over_1_5: "12 + Over 1.5",
+    combo_12_under_2_5: "12 + Under 2.5",
+    dc_combo_1x_multigoal_1_4: "1X + Multigol 1-4",
+    dc_combo_x2_multigoal_1_4: "X2 + Multigol 1-4",
+    dc_combo_12_multigoal_1_4: "12 + Multigol 1-4"
   };
+  const markets = Object.fromEntries(
+    Object.entries(marketLabels).filter(([key]) => source[key]).map(([key, label]) => [label, source[key]])
+  );
 
   const reportMarkets = {};
   for (const [name, metric] of Object.entries(markets)) {
@@ -57,12 +77,9 @@ async function main() {
 
   // Ricerca soglie sui dati storici più vecchi. Il blocco più recente resta holdout.
   // La selezione usa balanced accuracy per ridurre il vantaggio artificiale della classe maggioritaria.
-  const binaryDefinitions = [
-    { name: "Over 1.5", probability: "over_1_5", actual: "over_1_5" },
-    { name: "Over 2.5", probability: "over_2_5", actual: "over_2_5" },
-    { name: "Over 3.5", probability: "over_3_5", actual: "over_3_5" },
-    { name: "BTTS", probability: "btts_yes", actual: "btts_yes" }
-  ];
+  const binaryDefinitions = Object.keys(marketLabels)
+    .filter(key => key !== "1X2" && source[key])
+    .map(key => ({ name: marketLabels[key], probability: key, actual: key }));
   const orderedResults = Array.isArray(data.results)
     ? [...data.results].sort((a, b) => String(a.match_date || "").localeCompare(String(b.match_date || "")))
     : [];
