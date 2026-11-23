@@ -1206,8 +1206,9 @@ function calculatePrediction(fixture, history) {
     awayAgainst,
     20000
   );
-  // Poisson resta il modello principale; l’ibrido rimane sperimentale.
-  const probabilities = poissonProbabilities;
+  // Il modello ibrido usa le probabilità prodotte dal bootstrap + Monte Carlo.
+  // Poisson resta disponibile separatamente per il confronto nel backtest.
+  const probabilities = hybridMonteCarlo.probabilities;
 
   // Affidabilità indicativa dei mercati.
   const reliability = {};
@@ -1227,7 +1228,7 @@ function calculatePrediction(fixture, history) {
       score: `${item.home}-${item.away}`,
       probability: percent(item.probability)
     }));
-  const exactScores = poissonExactScores;
+  const exactScores = hybridMonteCarlo.top_exact_scores;
 
   return {
     ok: true,
