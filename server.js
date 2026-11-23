@@ -2358,8 +2358,11 @@ app.get(
         return true;
       });
       const includeStats = String(req.query.include_stats || "").toLowerCase() === "true";
-      const statsEvaluationLimit = Math.min(Math.max(Number(req.query.stats_limit) || 20, 1), 30);
-      const evaluationMatches = dateMatches.slice(-(includeStats ? Math.min(limit, statsEvaluationLimit) : limit));
+      const statsEvaluationLimit = Math.min(Math.max(Number(req.query.stats_limit) || 20, 1), 300);
+      const offset = Math.max(0, Number.parseInt(req.query.offset || "0", 10) || 0);
+      const evaluationMatches = includeStats
+        ? dateMatches.slice(offset, offset + Math.min(limit, statsEvaluationLimit))
+        : dateMatches.slice(-limit);
       const results = [];
       const statisticalMarketRows = {};
 
@@ -2380,8 +2383,13 @@ app.get(
         if (includeStats) {
           try {
             historicalStatsForecast = await buildHistoricalStatForecast(match, history);
-            const actualBody = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
-            actualMatchStats = getNormalizedMatchStats(actualBody);
+            const { data: storedStats, error: storedStatsError } = await supabase
+              .from("match_statistics")
+              .select("normalized_stats")
+              .eq("match_id", String(match.id))
+              .maybeSingle();
+            if (storedStatsError) throw storedStatsError;
+            actualMatchStats = storedStats?.normalized_stats || null;
           } catch (statsError) {
             console.error("Backtest statistiche " + match.id + ":", statsError.message);
           }
@@ -2768,9 +2776,12 @@ app.get(
         from_date: fromDate,
         to_date: toDate,
         requested_matches: limit,
+        offset: includeStats ? offset : null,
         available_history_matches: history.length,
         matches_on_target_date: dateMatches.length,
         evaluation_matches_selected: evaluationMatches.length,
+        next_offset: includeStats ? offset + evaluationMatches.length : null,
+        done: includeStats ? offset + evaluationMatches.length >= dateMatches.length : null,
         evaluation_period: {
           from: evaluationMatches[0]?.match_date || null,
           to: evaluationMatches[evaluationMatches.length - 1]?.match_date || null
@@ -2778,7 +2789,7 @@ app.get(
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
         statistical_accuracy_by_market: includeStats ? statisticalAccuracyByMarket : null,
-        statistical_backtest: { enabled: includeStats, evaluated_matches: includeStats ? results.filter(r => r.actual_statistics).length : 0, requested_limit: includeStats ? Math.min(limit, statsEvaluationLimit) : 0 },
+        statistical_backtest: { enabled: includeStats, evaluated_matches: includeStats ? results.filter(r => r.actual_statistics).length : 0, requested_limit: includeStats ? Math.min(limit, statsEvaluationLimit) : 0, offset },
         advanced_metrics: advancedMetrics,
         model: "Poisson con shrinkage bayesiano",
         results
