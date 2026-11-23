@@ -373,12 +373,12 @@ app.post(
         try {
           const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
           return { match_id: String(match.id), league_id: leagueId, match_date: match.match_date,
-            stats: getNormalizedMatchStats(body), updated_at: new Date().toISOString() };
+            normalized_stats: getNormalizedMatchStats(body), updated_at: new Date().toISOString() };
         } catch (error) {
           return { match_id: String(match.id), error: error.message };
         }
       });
-      const successful = rows.filter(row => row && row.stats);
+      const successful = rows.filter(row => row && row.normalized_stats);
       if (successful.length) {
         const { error } = await supabase.from("match_statistics").upsert(successful, { onConflict: "match_id" });
         if (error) throw error;
@@ -1206,12 +1206,12 @@ async function buildHistoricalStatForecast(fixture, history) {
   if (supabase && unique.length) {
     const { data, error } = await supabase
       .from("match_statistics")
-      .select("match_id,stats")
+      .select("match_id,normalized_stats")
       .in("match_id", unique.map(match => String(match.id)));
     if (error) throw error;
     persistedStats = data || [];
   }
-  const statsById = new Map(persistedStats.map(row => [String(row.match_id), row.stats]));
+  const statsById = new Map(persistedStats.map(row => [String(row.match_id), row.normalized_stats]));
   const missingStats = unique.filter(match => !statsById.has(String(match.id)));
   const fetched = await mapWithConcurrency(missingStats, 5, async match => {
     const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
@@ -1221,7 +1221,7 @@ async function buildHistoricalStatForecast(fixture, history) {
   for (const item of successfulFetches) statsById.set(item.id, item.stats);
   if (supabase && successfulFetches.length) {
     const { error } = await supabase.from("match_statistics").upsert(
-      successfulFetches.map(item => ({ match_id: item.id, league_id: item.league_id, match_date: item.match_date, stats: item.stats, updated_at: new Date().toISOString() })),
+      successfulFetches.map(item => ({ match_id: item.id, league_id: item.league_id, match_date: item.match_date, normalized_stats: item.stats, updated_at: new Date().toISOString() })),
       { onConflict: "match_id" }
     );
     if (error) console.error("Persistenza statistiche storiche:", error.message);
