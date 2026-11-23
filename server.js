@@ -746,7 +746,7 @@ function sampleForTeamByVenue(matches, teamName, beforeDate, venue) {
     });
 }
 
-function calculatePrediction(fixture, history, lineupImpact = null) {
+function calculatePrediction(fixture, history, lineupImpact = null, statisticalForecast = null) {
   const homeName = fixture.home_team || getHomeName(fixture);
   const awayName = fixture.away_team || getAwayName(fixture);
   const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
@@ -870,6 +870,28 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
   let awayLambda = Math.max(0.10, Math.min(4.5,
     0.3 * overallAwayLambda + 0.7 * venueAwayLambda
   ));
+
+  // Integra gli xG storici nel modello gol solo quando entrambi i lati
+  // hanno almeno 5 osservazioni reali. Gli xG correggono, non sostituiscono,
+  // la stima Poisson basata sui risultati e sul rendimento casa/trasferta.
+  const xgAverages = statisticalForecast?.weighted_averages?.expected_goals;
+  const xgCounts = statisticalForecast?.samples?.expected_goals;
+  const xgReady = getNumber(xgAverages?.home) !== null &&
+    getNumber(xgAverages?.away) !== null &&
+    Number(xgCounts?.home || 0) >= 5 &&
+    Number(xgCounts?.away || 0) >= 5;
+  const preXgLambdas = { home: homeLambda, away: awayLambda };
+  const XG_BLEND_WEIGHT = 0.25;
+  if (xgReady) {
+    homeLambda = Math.max(0.10, Math.min(4.5,
+      (1 - XG_BLEND_WEIGHT) * homeLambda +
+      XG_BLEND_WEIGHT * Number(xgAverages.home)
+    ));
+    awayLambda = Math.max(0.10, Math.min(4.5,
+      (1 - XG_BLEND_WEIGHT) * awayLambda +
+      XG_BLEND_WEIGHT * Number(xgAverages.away)
+    ));
+  }
   if (lineupImpact?.applied) {
     homeLambda *= lineupImpact.home_attack_factor / lineupImpact.away_defence_factor;
     awayLambda *= lineupImpact.away_attack_factor / lineupImpact.home_defence_factor;
@@ -971,9 +993,13 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
   return {
     ok: true,
 
-    model: lineupImpact?.applied
-      ? "Poisson ponderato con shrinkage bayesiano, rendimento casa/trasferta e forma titolari (sperimentale)"
-      : "Poisson ponderato con shrinkage bayesiano e rendimento casa/trasferta",
+    model: [
+      "Poisson ponderato",
+      "shrinkage bayesiano",
+      "rendimento casa/trasferta",
+      ...(xgReady ? ["integrazione xG storici (25%)"] : []),
+      ...(lineupImpact?.applied ? ["forma titolari (sperimentale)"] : [])
+    ].join(" + "),
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
@@ -1022,6 +1048,23 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
         venue_weight: 0.7
       },
       venue_split_used: homeVenueReady && awayVenueReady,
+      xg_adjustment: {
+        applied: xgReady,
+        blend_weight: xgReady ? XG_BLEND_WEIGHT : 0,
+        historical_xg: xgReady ? {
+          home: Number(Number(xgAverages.home).toFixed(3)),
+          away: Number(Number(xgAverages.away).toFixed(3))
+        } : null,
+        sample_size: {
+          home: Number(xgCounts?.home || 0),
+          away: Number(xgCounts?.away || 0)
+        },
+        lambdas_before: {
+          home: Number(preXgLambdas.home.toFixed(3)),
+          away: Number(preXgLambdas.away.toFixed(3))
+        },
+        reason: xgReady ? "xG disponibili su almeno 5 partite per entrambe le squadre." : "xG mancanti o campione inferiore a 5 partite: nessuna correzione."
+      },
       lineup_form_adjustment: lineupImpact || { applied: false, reason: "Non disponibile" }
     },
 
@@ -1979,8 +2022,19 @@ app.get(
         return null;
       });
       const lineupImpact = calculateLineupFormImpact(playerForm);
-      const prediction = calculatePrediction(fixture, history, lineupImpact);
 
+      // Recupera prima le statistiche storiche: gli xG validi partecipano
+      // anche al calcolo degli expected goals, non solo ai mercati di volume.
+      let statisticalForecast = null;
+      try {
+        statisticalForecast = await buildHistoricalStatForecast(fixture, history);
+      } catch (statsError) {
+        console.error("Modello statistiche avanzate non disponibile:", statsError.message);
+      }
+
+      const prediction = calculatePrediction(
+        fixture, history, lineupImpact, statisticalForecast
+      );
       if (!prediction.ok) {
         return res.status(422).json({
           ok: false,
@@ -1988,18 +2042,11 @@ app.get(
           ...prediction
         });
       }
-
-      let statisticalForecast = null;
-      try {
-        statisticalForecast = await buildHistoricalStatForecast(fixture, history);
-        if (statisticalForecast?.probabilities) {
-          prediction.probabilities = {
-            ...prediction.probabilities,
-            ...statisticalForecast.probabilities
-          };
-        }
-      } catch (statsError) {
-        console.error("Modello statistiche avanzate non disponibile:", statsError.message);
+      if (statisticalForecast?.probabilities) {
+        prediction.probabilities = {
+          ...prediction.probabilities,
+          ...statisticalForecast.probabilities
+        };
       }
 
       res.json({
