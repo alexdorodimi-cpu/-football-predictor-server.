@@ -364,6 +364,31 @@ button.full{width:100%}
   <pre id="backtestResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
  </div>
 
+ <div class="panel">
+  <div class="panel-heading">
+   <h2>🎯 Generatore Multiple AI</h2>
+   <small>Poisson + Monte Carlo</small>
+  </div>
+  <label>Data delle partite</label>
+  <input type="date" id="multipleDate">
+  <label>Profilo di rischio</label>
+  <select id="multipleMode">
+   <option value="prudente">Prudente · soglia 75%</option>
+   <option value="equilibrata" selected>Equilibrata · soglia 65%</option>
+   <option value="rischiosa">Rischiosa · soglia 55%</option>
+  </select>
+  <label>Numero massimo di selezioni</label>
+  <select id="multipleCount">
+   <option value="3">3 selezioni</option>
+   <option value="5" selected>5 selezioni</option>
+   <option value="8">8 selezioni</option>
+   <option value="10">10 selezioni</option>
+  </select>
+  <button class="full" id="generateMultiplesButton" onclick="generateMultiples()">GENERA MULTIPLA</button>
+  <div id="multipleResult" style="margin-top:14px"></div>
+  <p class="muted">Le percentuali sono stime. Le selezioni della stessa partita possono essere correlate: la probabilità combinata teorica non è una probabilità reale garantita.</p>
+ </div>
+
  <div class="section-heading">
   <h2>📅 Partite</h2>
   <span class="muted" id="dateLabel"></span>
@@ -401,6 +426,8 @@ document.getElementById("date").value=
 
 document.getElementById("dateLabel").textContent=
  document.getElementById("date").value;
+
+document.getElementById("multipleDate").value=document.getElementById("date").value;
 
 function saveToken(){
  const token=tokenInput.value.trim();
@@ -750,6 +777,42 @@ function renderAnalysis(home,away,homeStats,awayStats,prediction,predictionError
  </div>`;
 
  content.innerHTML=html;
+}
+
+function renderMultiplesResult(result){
+ const box=document.getElementById("multipleResult");
+ if(!result.selections||!result.selections.length){
+  box.innerHTML='<div class="empty">Nessuna selezione supera la soglia impostata. Prova un altro profilo o una data diversa.</div>';
+  return;
+ }
+ let html='<div class="analysisNote"><strong>'+result.selected_selections+' selezioni · '+escapeHtml(result.mode)+'</strong><br>Partite analizzate: '+result.diagnostics.fixtures_analyzed+' · Mercati statistici disponibili: '+result.diagnostics.stats_markets_available+'</div>';
+ result.selections.forEach((item,index)=>{
+  html+='<div class="match" style="margin-top:9px"><div class="match-top"><span class="league">'+(index+1)+'. '+escapeHtml(item.league||"Campionato")+'</span><strong>'+Number(item.probability).toFixed(1)+'%</strong></div><div class="teams">'+escapeHtml(item.home_team)+' - '+escapeHtml(item.away_team)+'</div><div class="match-bottom"><span>'+escapeHtml(item.label||item.market)+'</span><span class="muted">'+escapeHtml(item.source)+'</span></div></div>';
+ });
+ html+='<p class="muted">Probabilità combinata teorica: '+Number(result.naive_combined_probability||0).toFixed(2)+'%. Non tiene conto delle correlazioni.</p>';
+ box.innerHTML=html;
+}
+
+async function generateMultiples(){
+ const date=document.getElementById("multipleDate").value;
+ const mode=document.getElementById("multipleMode").value;
+ const count=document.getElementById("multipleCount").value;
+ const box=document.getElementById("multipleResult");
+ const button=document.getElementById("generateMultiplesButton");
+ if(!date){box.textContent="Seleziona una data.";return;}
+ button.disabled=true;
+ button.textContent="ANALISI IN CORSO...";
+ box.innerHTML='<div class="loading">⏳ Analisi partite e mercati in corso...</div>';
+ try{
+  const query="?date="+encodeURIComponent(date)+"&mode="+encodeURIComponent(mode)+"&max_selections="+encodeURIComponent(count);
+  const result=await api("/api/multiples"+query);
+  renderMultiplesResult(result);
+ }catch(error){
+  box.innerHTML='<div class="empty">Errore generatore: '+escapeHtml(error.message)+'</div>';
+ }finally{
+  button.disabled=false;
+  button.textContent="GENERA MULTIPLA";
+ }
 }
 
 async function runMonthlyBacktest(){
