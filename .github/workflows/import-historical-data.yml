@@ -1,0 +1,35 @@
+name: Football Predictor historical data import
+
+on:
+  # Aggiorna lo storico settimanalmente; eseguibile anche manualmente.
+  schedule:
+    - cron: "15 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      league_id:
+        description: "ID campionato PitchAPI (vuoto = tutti i campionati)"
+        required: false
+        type: string
+
+concurrency:
+  group: football-predictor-historical-import
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  import-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Import historical seasons into Supabase
+        env:
+          BASE_URL: https://football-predictor-server-1-b267.onrender.com
+          PREDICTOR_ACCESS_TOKEN: ${{ secrets.PREDICTOR_ACCESS_TOKEN }}
+          LEAGUE_ID: ${{ inputs.league_id }}
+          REQUEST_PAUSE_MS: "300"
+        run: node scripts/import-historical-data.js
