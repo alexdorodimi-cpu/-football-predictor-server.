@@ -1958,10 +1958,9 @@ app.get(
         .order("match_date", { ascending: false })
         .limit(5000);
 
-      if (season) {
-        backtestQuery = backtestQuery.eq("season", season);
-      }
-
+      // Carica lo storico completo del campionato, incluse le stagioni
+      // precedenti: serve per avere campioni sufficienti a inizio stagione.
+      // La selezione delle partite da valutare resta limitata alla stagione richiesta.
       const { data, error } = await backtestQuery;
 
       if (error) throw error;
@@ -1971,6 +1970,9 @@ app.get(
       );
       const dateMatches = history.filter(match => {
         if (!isFinished(match)) return false;
+        // La stagione limita il campione di valutazione, non lo storico
+        // disponibile al modello per i soli incontri precedenti.
+        if (season && String(match.season || "") !== season) return false;
         const day = String(match.match_date || "").slice(0, 10);
         if (targetDate) return day === targetDate;
         if (fromDate && day < fromDate) return false;
