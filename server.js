@@ -1554,6 +1554,77 @@ app.post(
 );
 
 // ==========================================
+// IMPORTAZIONE STORICO COMPLETO CAMPIONATO
+// ==========================================
+// Importa le stagioni dichiarate da PitchAPI e salva i risultati in Supabase.
+// Le chiamate sono sequenziali per rispettare il fair-use dell'API.
+app.post(
+  "/api/sync/league/:id/history",
+  requireSportApi,
+  requireDatabase,
+  async (req, res) => {
+    const leagueId = String(req.params.id || "");
+    if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
+      return res.status(400).json({ ok: false, error: "ID campionato non valido." });
+    }
+
+    try {
+      const catalogue = await sportGet("/leagues");
+      const leagues = catalogue?.data?.leagues || catalogue?.leagues || [];
+      const league = leagues.find(item => String(item.id) === leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, error: "Campionato non trovato nel catalogo PitchAPI." });
+      }
+
+      const availableSeasons = Array.isArray(league.seasons) ? league.seasons : [];
+      const requested = String(req.query.seasons || "").trim();
+      const selectedSeasons = requested
+        ? requested.split(",").map(value => value.trim()).filter(Boolean)
+        : availableSeasons;
+      const validSeasons = selectedSeasons.filter(value => /^(?:\d{4}\/\d{4}|\d{4})$/.test(value));
+      if (!validSeasons.length) {
+        return res.status(422).json({
+          ok: false,
+          error: "Nessuna stagione valida disponibile per questo campionato.",
+          available_seasons: availableSeasons
+        });
+      }
+
+      let receivedMatches = 0;
+      let savedMatches = 0;
+      const seasonReports = [];
+      for (const season of validSeasons) {
+        const body = await sportGet(
+          `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=played`
+        );
+        const matches = getMatches(body);
+        const saved = await saveMatchesToDatabase(matches, season);
+        receivedMatches += matches.length;
+        savedMatches += saved;
+        seasonReports.push({
+          season,
+          received_matches: matches.length,
+          upserted_rows: saved
+        });
+      }
+
+      res.json({
+        ok: true,
+        league: { id: leagueId, name: league.name },
+        available_seasons: availableSeasons,
+        seasons_imported: validSeasons.length,
+        received_matches: receivedMatches,
+        upserted_rows: savedMatches,
+        seasons: seasonReports,
+        database: "Supabase"
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+);
+
+// ==========================================
 // DETTAGLIO PARTITA
 // ==========================================
 
