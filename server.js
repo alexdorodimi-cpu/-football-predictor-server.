@@ -1538,7 +1538,7 @@ app.get(
         .eq("league_id", leagueId)
         .not("home_goals", "is", null)
         .not("away_goals", "is", null)
-        .order("match_date", { ascending: true })
+        .order("match_date", { ascending: false })
         .limit(5000);
 
       if (season) {
@@ -1549,7 +1549,9 @@ app.get(
 
       if (error) throw error;
 
-      const history = data || [];
+      const history = (data || []).sort((a, b) =>
+        new Date(a.match_date) - new Date(b.match_date)
+      );
       const evaluationMatches = history.slice(-limit);
       const results = [];
 
