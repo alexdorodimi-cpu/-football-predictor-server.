@@ -1507,7 +1507,7 @@ app.get(
     try {
       const leagueId = String(req.params.leagueId);
 
-      if (!validNumericId(leagueId)) {
+      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
         return res.status(400).json({
           ok: false,
           error: "ID campionato non valido."
