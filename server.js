@@ -537,22 +537,44 @@ function percent(value) {
   return Number((value * 100).toFixed(1));
 }
 
-function getReliability(probability, sampleSize) {
-  // La probabilita prevista non misura l'affidabilita del modello.
-  // Il punteggio e il livello usano la stessa scala basata sulla numerosita
-  // del campione: 30 o piu' partite raggiungono il massimo.
-  const safeSampleSize = Math.max(0, Number(sampleSize) || 0);
-  const score = Number(Math.max(0, Math.min(100, safeSampleSize / 30 * 100)).toFixed(1));
+function getReliability(sampleSize, homeVenueSize, awayVenueSize, leagueSampleSize) {
+  // Rating trasparente della qualita' dei dati disponibili.
+  // Non viene confuso con la probabilita' di vincita o con l'accuratezza storica.
+  const home = Math.max(0, Number(sampleSize?.home) || 0);
+  const away = Math.max(0, Number(sampleSize?.away) || 0);
+  const homeVenue = Math.max(0, Number(homeVenueSize) || 0);
+  const awayVenue = Math.max(0, Number(awayVenueSize) || 0);
+  const league = Math.max(0, Number(leagueSampleSize) || 0);
+  const minimumTeamSample = Math.min(home, away);
+  const maximumTeamSample = Math.max(home, away);
+
+  const teamCoverage = Math.min(1, minimumTeamSample / 10);
+  const venueCoverage = Math.min(1, Math.min(homeVenue, awayVenue) / 5);
+  const leagueCoverage = Math.min(1, league / 100);
+  const sampleBalance = maximumTeamSample > 0
+    ? minimumTeamSample / maximumTeamSample
+    : 0;
+
+  const components = {
+    team_history: Number((teamCoverage * 40).toFixed(1)),
+    home_away_history: Number((venueCoverage * 30).toFixed(1)),
+    league_history: Number((leagueCoverage * 20).toFixed(1)),
+    sample_balance: Number((sampleBalance * 10).toFixed(1))
+  };
+  const score = Number(Object.values(components).reduce((sum, value) => sum + value, 0).toFixed(1));
   const level =
-    score >= 75 ? "ALTA" :
+    score >= 80 ? "ALTA" :
     score >= 60 ? "MEDIA" :
     "BASSA";
 
   return {
     score,
     level,
-    sample_size: safeSampleSize,
-    note: "Indicatore della numerosita del campione, non probabilita di successo ne calibrazione del modello."
+    sample_size: { home, away },
+    venue_sample_size: { home: homeVenue, away: awayVenue },
+    league_sample_size: league,
+    components,
+    note: "Rating della copertura e qualita' dei dati; non rappresenta l'accuratezza storica ne' una probabilita' di successo."
   };
 }
 
@@ -903,8 +925,10 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
 
   for (const [market, probability] of Object.entries(probabilities)) {
     reliability[market] = getReliability(
-      probability,
-      sampleSize
+      sampleSize,
+      homeVenueSample.length,
+      awayVenueSample.length,
+      leagueSample.length
     );
   }
 
