@@ -1,6 +1,9 @@
 name: Football Predictor historical data import
 
 on:
+  push:
+    branches:
+      - main
   # Aggiorna lo storico settimanalmente; eseguibile anche manualmente.
   schedule:
     - cron: "15 3 * * 0"
