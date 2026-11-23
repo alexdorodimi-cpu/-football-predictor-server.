@@ -2620,49 +2620,99 @@ function parseSisalOddsPdfText(text) {
   const updatedAt = updatedMatch ? updatedMatch[3] + "-" + updatedMatch[2] + "-" + updatedMatch[1] + "T" + updatedMatch[4] + "+01:00" : null;
   const monthNames = { gennaio:"01", febbraio:"02", marzo:"03", aprile:"04", maggio:"05", giugno:"06", luglio:"07", agosto:"08", settembre:"09", ottobre:"10", novembre:"11", dicembre:"12" };
   let currentDateLabel = null;
+  let currentEvent = null;
   const events = [];
   let candidateLines = 0;
   let rejectedRows = 0;
   const sampleLines = [];
-  const previewLines = lines.map(line => String(line).replace(/\\s+/g, " ").trim()).filter(Boolean).slice(18, 68);
+  const previewLines = lines.map(line => String(line).replace(/\s+/g, " ").trim()).filter(Boolean).slice(18, 68);
+
+  const finishEvent = () => {
+    if (!currentEvent) return;
+    const combined = currentEvent.parts.join(" ").replace(/\s+/g, " ").trim();
+    const firstOdd = combined.search(/(?<![A-Za-z])\d{1,3},\d{2}(?!\d)/);
+    if (firstOdd < 0) {
+      rejectedRows++;
+      currentEvent = null;
+      return;
+    }
+    const teamText = combined.slice(0, firstOdd).replace(/[\s|]+$/g, "").trim();
+    const oddsText = combined.slice(firstOdd);
+    const oddsTokens = (oddsText.match(/\d{1,3},\d{2}/g) || []).slice(0, 3);
+    const odds = oddsTokens.map(token => Number(token.replace(",", ".")));
+    if (!teamText || odds.length !== 3 || odds.some(value => !Number.isFinite(value) || value <= 1 || value > 1000)) {
+      rejectedRows++;
+      currentEvent = null;
+      return;
+    }
+    events.push({
+      date_label: currentEvent.date_label,
+      time: currentEvent.time,
+      competition_code: currentEvent.competition_code,
+      schedule_id: currentEvent.schedule_id,
+      event_id: currentEvent.event_id,
+      home_team_text: teamText,
+      team_text: teamText,
+      markets: { "1": odds[0], "X": odds[1], "2": odds[2] },
+      parsed_odds_columns: oddsTokens.length
+    });
+    currentEvent = null;
+  };
+
   for (const rawLine of lines) {
     const line = String(rawLine).replace(/\s+/g, " ").trim();
     if (!line) continue;
     const normalizedLine = normalizeSisalText(line);
     const dateHeading = normalizedLine.match(/^(?:(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)[,]?\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/i);
-    if (dateHeading) { currentDateLabel = dateHeading[1].padStart(2,"0") + "/" + monthNames[dateHeading[2]]; continue; }
-    const prefix = line.match(/^(\d{1,2}\.\d{2})\s+([A-Z0-9]{2,8})\s+(\d{3,6})\s+(\d{2,7})\s+(.+)$/i);
-    if (!prefix) continue;
-    candidateLines++;
-    if (sampleLines.length < 5) sampleLines.push(line.slice(0, 240));
-    const tokens = prefix[5].split(" ");
-    const isOddsToken = token => token === "-" || /^-?\d+(?:,\d{1,2})?$/.test(token);
-    let oddsStart = tokens.length;
-    while (oddsStart > 0 && isOddsToken(tokens[oddsStart - 1]) && tokens.length - oddsStart < 22) oddsStart--;
-    const oddsTokens = tokens.slice(oddsStart);
-    const teamText = tokens.slice(0, oddsStart).join(" ").trim();
-    if (oddsTokens.length < 18 || oddsTokens.length > 22 || !teamText) { rejectedRows++; continue; }
-    const parseOdd = token => {
-      if (token === "-") return null;
-      const value = Number(token.replace(",", "."));
-      return Number.isFinite(value) && value > 1 && value <= 1000 ? value : null;
-    };
-    const odds = oddsTokens.map(parseOdd);
-    if (odds.slice(0,3).some(value => value === null)) { rejectedRows++; continue; }
-    events.push({
-      date_label: currentDateLabel, time: prefix[1], competition_code: prefix[2],
-      schedule_id: prefix[3], event_id: prefix[4], home_team_text: teamText,
-      team_text: teamText, markets: { "1": odds[0], "X": odds[1], "2": odds[2] },
-      parsed_odds_columns: oddsTokens.length
-    });
-  }
-  return { updated_at: updatedAt, events, diagnostics: {
-    text_lines: lines.length, candidate_event_lines: candidateLines,
-    parsed_events: events.length, rejected_candidate_lines: rejectedRows,
-    sample_lines: sampleLines, preview_lines: previewLines
-  } };
-}
+    if (dateHeading) {
+      finishEvent();
+      currentDateLabel = dateHeading[1].padStart(2, "0") + "/" + monthNames[dateHeading[2]];
+      continue;
+    }
 
+    // Il PDF Sisal può concatenare codice, orario e quote precedenti,
+    // poi riportare palinsesto e avvenimento sulla stessa riga o sulle successive.
+    const marker = line.match(/^([A-Z]{2,8})(\d{1,2}\.\d{2})(.*)$/i);
+    if (marker) {
+      finishEvent();
+      candidateLines++;
+      if (sampleLines.length < 8) sampleLines.push(line.slice(0, 240));
+      const ids = marker[3].match(/(36\d{3})\s*(\d{1,7})(?:\s|$)/);
+      if (!ids) {
+        rejectedRows++;
+        currentEvent = null;
+        continue;
+      }
+      const idEnd = marker[3].indexOf(ids[0]) + ids[0].length;
+      const afterIds = marker[3].slice(idEnd).trim();
+      currentEvent = {
+        date_label: currentDateLabel,
+        time: marker[2],
+        competition_code: marker[1].toUpperCase(),
+        schedule_id: ids[1],
+        event_id: ids[2],
+        parts: afterIds ? [afterIds] : []
+      };
+      continue;
+    }
+
+    if (currentEvent) currentEvent.parts.push(line);
+  }
+  finishEvent();
+
+  return {
+    updated_at: updatedAt,
+    events,
+    diagnostics: {
+      text_lines: lines.length,
+      candidate_event_lines: candidateLines,
+      parsed_events: events.length,
+      rejected_candidate_lines: rejectedRows,
+      sample_lines: sampleLines,
+      preview_lines: previewLines
+    }
+  };
+}
 function findSisalEventForFixture(events, fixture) {
   const home = normalizeSisalText(fixture.home_team);
   const away = normalizeSisalText(fixture.away_team);
