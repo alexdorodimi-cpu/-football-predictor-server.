@@ -2300,6 +2300,94 @@ app.get(
   }
 );
 
+// Normalizza le statistiche PitchAPI: supporta gruppi/items, stats indicizzate,
+// periodi differenti e varianti dei nomi delle statistiche.
+function normalizeStatKey(value) {
+  return String(value || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+const STAT_ALIASES = {
+  corners: ["corners", "corner_kicks", "corner", "total_corners"],
+  total_shots: ["total_shots", "shots", "shots_total", "totalshots"],
+  shots_on_target: ["shots_on_target", "shotson target", "shotson_target", "shotsongoal", "shots_on_goal", "on_target"],
+  shots_off_target: ["shots_off_target", "shots_off_goal", "off_target"],
+  blocked_shots: ["blocked_shots", "blockedshots"],
+  yellow_cards: ["yellow_cards", "yellowcards", "yellow_card"],
+  red_cards: ["red_cards", "redcards", "red_card"],
+  fouls: ["fouls", "total_fouls", "fouls_committed"],
+  offsides: ["offsides", "offside"],
+  possession: ["ball_possession", "ballpossession", "possession", "ball_possesion"],
+  expected_goals: ["expected_goals", "expectedgoals", "xg"],
+  saves: ["saves", "goalkeeper_saves"],
+  passes: ["passes", "total_passes"],
+  accurate_passes: ["accurate_passes", "passes_accurate"],
+  tackles: ["tackles", "total_tackles"]
+};
+
+function extractPitchApiStatRows(body) {
+  const roots = [
+    body?.data?.periods, body?.response?.data?.periods, body?.periods,
+    body?.data?.statistics, body?.response?.data?.statistics,
+    body?.statistics, body?.data, body?.response
+  ];
+  const rows = [];
+  const seen = new Set();
+  const add = (key, home, away, period) => {
+    if (key == null) return;
+    const normalized = normalizeStatKey(key);
+    const signature = [normalized, home, away, period].join("|");
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    rows.push({ key: normalized, home: getNumber(home), away: getNumber(away), period });
+  };
+  const walk = (node, period = "all") => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, period);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const nextPeriod = String(node.period || node.type || period).toLowerCase();
+    if (Array.isArray(node.groups)) {
+      for (const group of node.groups) {
+        for (const item of group?.items || []) {
+          const key = item.key || item.name || item.type;
+          add(key, item.home ?? item.home_value ?? item.values?.home,
+            item.away ?? item.away_value ?? item.values?.away, nextPeriod);
+          if (item.stat && typeof item.stat === "object") {
+            add(key, item.stat.home ?? item.stat.home_value,
+              item.stat.away ?? item.stat.away_value, nextPeriod);
+          }
+        }
+      }
+    }
+    if (node.key || node.name) {
+      add(node.key || node.name, node.home ?? node.home_value ?? node.values?.home,
+        node.away ?? node.away_value ?? node.values?.away, nextPeriod);
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (["groups", "items", "periods"].includes(key)) continue;
+      if (Array.isArray(value) || (value && typeof value === "object")) walk(value, nextPeriod);
+    }
+  };
+  for (const root of roots) walk(root);
+  return rows;
+}
+
+function getNormalizedMatchStats(body) {
+  const rows = extractPitchApiStatRows(body);
+  const result = {};
+  for (const [field, aliases] of Object.entries(STAT_ALIASES)) {
+    const accepted = new Set(aliases.map(normalizeStatKey));
+    const candidates = rows.filter(row => accepted.has(row.key));
+    const preferred = candidates.find(row => row.period === "all" || row.period === "match") || candidates[0];
+    result[field] = preferred ? { home: preferred.home, away: preferred.away, source_key: preferred.key } : { home: null, away: null, source_key: null };
+  }
+  return result;
+}
+
 // ==========================================
 // MEDIE E STATISTICHE SQUADRA
 // ==========================================
