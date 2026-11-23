@@ -1033,6 +1033,121 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
 // STATUS SERVER E CAMPIONATI
 // ==========================================
 
+function poissonCountProbability(lambda, value) {
+  if (lambda <= 0) return value === 0 ? 1 : 0;
+  let factorial = 1;
+  for (let i = 2; i <= value; i++) factorial *= i;
+  return Math.exp(-lambda) * Math.pow(lambda, value) / factorial;
+}
+function countMarketProbabilities(lambda, prefix, maxLine = 30) {
+  const distribution = Array.from({ length: maxLine + 1 }, (_, value) => poissonCountProbability(lambda, value));
+  distribution[maxLine] += Math.max(0, 1 - distribution.reduce((a, b) => a + b, 0));
+  const output = {};
+  for (let half = 1; half <= maxLine; half++) {
+    const line = half - 0.5;
+    const over = distribution.slice(half).reduce((a, b) => a + b, 0);
+    const suffix = String(line).replace(".", "_");
+    output[prefix + "_over_" + suffix] = percent(over);
+    output[prefix + "_under_" + suffix] = percent(1 - over);
+  }
+  return output;
+}
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      try { results[index] = await worker(items[index], index); }
+      catch (error) { results[index] = { error: error.message }; }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+async function buildHistoricalStatForecast(fixture, history) {
+  const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
+  const homeName = String(fixture.home_team || getHomeName(fixture) || "").trim().toLowerCase();
+  const awayName = String(fixture.away_team || getAwayName(fixture) || "").trim().toLowerCase();
+  const eligible = history.filter(match => {
+    const date = match.match_date || match.date;
+    return date && isFinished(match) && new Date(date) < new Date(fixtureDate) &&
+      getNumber(match.home_goals) !== null && getNumber(match.away_goals) !== null;
+  }).sort((a, b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date));
+  const selectTeam = name => eligible.filter(match =>
+    String(match.home_team || "").trim().toLowerCase() === name ||
+    String(match.away_team || "").trim().toLowerCase() === name
+  ).slice(0, 10);
+  const homeMatches = selectTeam(homeName), awayMatches = selectTeam(awayName);
+  const unique = [...new Map([...homeMatches, ...awayMatches].filter(m => m.id).map(m => [String(m.id), m])).values()];
+  const fetched = await mapWithConcurrency(unique, 5, async match => {
+    const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
+    return { id: String(match.id), stats: getNormalizedMatchStats(body) };
+  });
+  const statsById = new Map(fetched.filter(x => x && !x.error).map(x => [x.id, x.stats]));
+  const fields = ["corners", "total_shots", "shots_on_target", "shots_off_target", "blocked_shots",
+    "yellow_cards", "red_cards", "fouls", "offsides", "possession", "expected_goals",
+    "saves", "passes", "accurate_passes", "tackles", "big_chances", "big_chances_missed",
+    "hit_woodwork", "crosses", "long_balls", "duels_won", "aerials_won", "interceptions",
+    "clearances", "xg_open_play", "xg_set_play", "npxg", "ppda", "field_tilt",
+    "box_entries", "progressive_passes", "progressive_carries", "key_passes",
+    "shot_assists", "xg_chain", "xg_buildup", "xa", "xt", "vaep"];
+  const samples = {};
+  for (const field of fields) samples[field] = { home: [], away: [] };
+  const addSamples = (matches, targetSide) => {
+    const targetName = targetSide === "home" ? homeName : awayName;
+    for (const match of matches) {
+      const stats = statsById.get(String(match.id));
+      if (!stats) continue;
+      const apiSide = String(match.home_team || "").trim().toLowerCase() === targetName ? "home" : "away";
+      for (const field of fields) {
+        const value = stats[field] && stats[field][apiSide];
+        if (value !== null && value !== undefined && Number.isFinite(Number(value))) {
+          samples[field][targetSide].push({ value: Number(value), date: match.match_date || match.date });
+        }
+      }
+    }
+  };
+  addSamples(homeMatches, "home"); addSamples(awayMatches, "away");
+  const average = rows => {
+    if (!rows.length) return null;
+    const ordered = [...rows].sort((a, b) => new Date(b.date) - new Date(a.date));
+    let sum = 0, weights = 0;
+    ordered.forEach((row, index) => {
+      const weight = Math.pow(0.75, index);
+      sum += row.value * weight; weights += weight;
+    });
+    return weights ? Number((sum / weights).toFixed(3)) : null;
+  };
+  const averages = {}, counts = {}, probabilities = {};
+  const countMarkets = ["corners", "total_shots", "shots_on_target", "shots_off_target", "blocked_shots",
+    "yellow_cards", "red_cards", "fouls", "offsides", "saves", "big_chances", "big_chances_missed",
+    "hit_woodwork", "crosses", "long_balls", "duels_won", "aerials_won", "interceptions",
+    "clearances", "box_entries", "progressive_passes", "progressive_carries", "key_passes", "shot_assists"];
+  for (const field of fields) {
+    averages[field] = { home: average(samples[field].home), away: average(samples[field].away), total: null };
+    if (averages[field].home !== null && averages[field].away !== null) {
+      averages[field].total = Number((averages[field].home + averages[field].away).toFixed(3));
+    }
+    counts[field] = { home: samples[field].home.length, away: samples[field].away.length };
+    if (countMarkets.includes(field)) {
+      for (const side of ["home", "away", "total"]) {
+        const lambda = averages[field][side];
+        if (lambda !== null) Object.assign(probabilities, countMarketProbabilities(lambda, field + "_" + side));
+      }
+    }
+  }
+  return {
+    source: "PitchAPI historical match statistics",
+    matches_requested: unique.length,
+    matches_with_stats: statsById.size,
+    samples: counts,
+    weighted_averages: averages,
+    probabilities,
+    note: "Statistiche assenti restano null; stime dei mercati di volume solo con campioni disponibili."
+  };
+}
+
 app.get("/api/auth-diagnostic", (req, res) => {
   const authorization = req.get("authorization") || "";
   const hasBearer = authorization.startsWith("Bearer ");
@@ -2392,7 +2507,31 @@ const STAT_ALIASES = {
   saves: ["saves", "goalkeeper_saves"],
   passes: ["passes", "total_passes"],
   accurate_passes: ["accurate_passes", "passes_accurate"],
-  tackles: ["tackles", "total_tackles"]
+  tackles: ["tackles", "total_tackles"],
+  big_chances: ["big_chances", "big_chances_created"],
+  big_chances_missed: ["big_chances_missed"],
+  hit_woodwork: ["hit_woodwork", "woodwork"],
+  crosses: ["crosses", "total_crosses"],
+  long_balls: ["long_balls", "longballs"],
+  duels_won: ["duels_won", "duels"],
+  aerials_won: ["aerials_won", "aerial_duels_won"],
+  interceptions: ["interceptions"],
+  clearances: ["clearances"],
+  xg_open_play: ["xg_open_play", "open_play_xg"],
+  xg_set_play: ["xg_set_play", "set_play_xg"],
+  npxg: ["npxg", "non_penalty_xg"],
+  ppda: ["ppda", "passes_per_defensive_action"],
+  field_tilt: ["field_tilt"],
+  box_entries: ["box_entries", "penalty_area_entries"],
+  progressive_passes: ["progressive_passes"],
+  progressive_carries: ["progressive_carries"],
+  key_passes: ["key_passes"],
+  shot_assists: ["shot_assists"],
+  xg_chain: ["xg_chain"],
+  xg_buildup: ["xg_buildup"],
+  xa: ["xa", "expected_assists"],
+  xt: ["xt", "expected_threat"],
+  vaep: ["vaep", "vaep_total"]
 };
 
 function extractPitchApiStatRows(body) {
