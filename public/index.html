@@ -367,7 +367,7 @@ button.full{width:100%}
  <div class="panel">
   <div class="panel-heading">
    <h2>🎯 Generatore Multiple AI</h2>
-   <small>Poisson + Monte Carlo</small>
+   <small>Bookmaker: Sisal · mercati standard</small>
   </div>
   <label>Data delle partite</label>
   <input type="date" id="multipleDate">
@@ -386,7 +386,7 @@ button.full{width:100%}
   </select>
   <button class="full" id="generateMultiplesButton" onclick="generateMultiples()">GENERA MULTIPLA</button>
   <div id="multipleResult" style="margin-top:14px"></div>
-  <p class="muted">Le percentuali sono stime. Le selezioni della stessa partita possono essere correlate: la probabilità combinata teorica non è una probabilità reale garantita.</p>
+  <p class="muted">Sono proposti solo mercati standard Poisson (1X2, Over/Under gol, Goal/No Goal). La disponibilità del singolo mercato va comunque verificata nell’evento Sisal. Le percentuali sono stime, non garanzie.</p>
  </div>
 
  <div class="section-heading">
@@ -804,7 +804,7 @@ async function generateMultiples(){
  button.textContent="ANALISI IN CORSO...";
  box.innerHTML='<div class="loading">⏳ Analisi partite e mercati in corso...</div>';
  try{
-  const query="?date="+encodeURIComponent(date)+"&mode="+encodeURIComponent(mode)+"&max_selections="+encodeURIComponent(count);
+  const query="?date="+encodeURIComponent(date)+"&mode="+encodeURIComponent(mode)+"&max_selections="+encodeURIComponent(count)+"&bookmaker=sisal";
   const result=await api("/api/multiples"+query);
   renderMultiplesResult(result);
  }catch(error){
