@@ -2401,6 +2401,12 @@ app.get(
         });
       }
       const profile = profiles[mode];
+      const bookmaker = String(req.query.bookmaker || "sisal").toLowerCase();
+      if (bookmaker !== "sisal") {
+        return res.status(400).json({ ok: false, error: "Bookmaker non supportato. Al momento è configurato Sisal." });
+      }
+      // Whitelist iniziale Sisal: mercati standard elaborabili dal modello Poisson.
+      // Mercati speciali e statistiche non verificate vengono esclususi.
       const maxMatches = Math.min(Math.max(Number(req.query.max_matches) || 10, 1), 20);
       const minProbability = Math.min(
         Math.max(Number(req.query.min_probability) || profile.minProbability, 50),
@@ -2476,21 +2482,9 @@ app.get(
             ? Math.min(prediction.samples.home, prediction.samples.away) : null, market);
         }
 
-        // Le statistiche aggiuntive sono recuperate solo per le prime 8 partite,
-        // per contenere il numero di richieste verso PitchAPI.
-        if (diagnostics.fixtures_analyzed <= 8) {
-          const stats = await runStatsMonteCarlo(match, history, 10000);
-          for (const [field, market] of Object.entries(stats.markets || {})) {
-            if (!market.available) continue;
-            diagnostics.stats_markets_available++;
-            for (const [line, overProbability] of Object.entries(market.over_probabilities || {})) {
-              addCandidate(`${field}_over_${line}`, overProbability, "monte_carlo_bootstrap",
-                Math.min(market.samples.home, market.samples.away), `${market.label} Over ${line}`);
-              addCandidate(`${field}_under_${line}`, 100 - Number(overProbability), "monte_carlo_bootstrap",
-                Math.min(market.samples.home, market.samples.away), `${market.label} Under ${line}`);
-            }
-          }
-        }
+        // Solo mercati standard del modello Poisson: niente cartellini, corner,
+        // tiri o mercati speciali non verificati nel palinsesto Sisal.
+        diagnostics.stats_markets_available = 0;
       }
 
       // Ordina per probabilità, poi limita mercati ripetuti della stessa partita.
@@ -2516,6 +2510,8 @@ app.get(
         ok: true,
         date,
         mode,
+        bookmaker: "Sisal",
+        market_policy: "Mercati standard Poisson: 1X2, Over/Under gol e Goal/No Goal. La disponibilità effettiva va verificata nell’evento Sisal.",
         minimum_probability: minProbability,
         max_matches: maxMatches,
         max_selections: maxSelections,
