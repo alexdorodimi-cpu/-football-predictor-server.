@@ -3,6 +3,7 @@ name: Football Predictor smoke tests
 on:
   push:
     branches:
+      - main
       - automation/backtest-metrics-release
   workflow_dispatch:
   schedule:
