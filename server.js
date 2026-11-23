@@ -2439,6 +2439,27 @@ app.get(
         .order("match_date", { ascending: true });
       if (error) throw error;
 
+      // Scarica una sola volta il foglio Sisal per tutta la multipla.
+      let sisalData = { available: false, stale: true, events: [], updated_at: null, age_minutes: null };
+      try {
+        const pdfResponse = await fetch(SISAL_BASE_PDF_URL, {
+          headers: { "User-Agent": "FootballPredictorAI/1.0", "Accept": "application/pdf" },
+          signal: AbortSignal.timeout(20000)
+        });
+        if (pdfResponse.ok) {
+          const pdfBuffer = Buffer.from(await pdfResponse.arrayBuffer());
+          if (pdfBuffer.subarray(0, 5).toString("ascii") === "%PDF-" && pdfBuffer.length >= 1000 && pdfBuffer.length <= 15 * 1024 * 1024) {
+            const pdfResult = await pdfParse(pdfBuffer);
+            const parsed = parseSisalOddsPdfText(pdfResult.text || "");
+            const updated = parsed.updated_at ? Date.parse(parsed.updated_at) : NaN;
+            const age = Number.isFinite(updated) ? Math.max(0, Math.round((Date.now() - updated) / 60000)) : null;
+            sisalData = { available: parsed.events.length > 0 && age !== null && age <= 180, stale: age === null || age > 180, events: parsed.events, updated_at: parsed.updated_at, age_minutes: age, diagnostics: parsed.diagnostics };
+          }
+        }
+      } catch (sisalError) {
+        console.error("Sisal multipla:", sisalError.message);
+      }
+
       const historyCache = {};
       const candidates = [];
       const diagnostics = {
@@ -2474,26 +2495,54 @@ app.get(
           continue;
         }
         diagnostics.fixtures_analyzed++;
+        const sisalEvent = sisalData.available ? findSisalEventForFixture(sisalData.events, match) : null;
+        if (!sisalEvent) {
+          diagnostics.fixtures_without_sisal_match = (diagnostics.fixtures_without_sisal_match || 0) + 1;
+          continue;
+        }
+        diagnostics.fixtures_matched_sisal = (diagnostics.fixtures_matched_sisal || 0) + 1;
 
-        const addCandidate = (market, probability, source, sampleSize, label) => {
+        const oddsKeys = {
+          "1": "1", "X": "X", "2": "2",
+          over_1_5: "over_1_5", under_1_5: "under_1_5",
+          over_2_5: "over_2_5", under_2_5: "under_2_5",
+          over_3_5: "over_3_5", under_3_5: "under_3_5",
+          btts_yes: "goal", btts_no: "no_goal"
+        };
+        const pairedMarkets = {
+          "1": ["1", "X", "2"], "X": ["1", "X", "2"], "2": ["1", "X", "2"],
+          over_1_5: ["over_1_5", "under_1_5"], under_1_5: ["over_1_5", "under_1_5"],
+          over_2_5: ["over_2_5", "under_2_5"], under_2_5: ["over_2_5", "under_2_5"],
+          over_3_5: ["over_3_5", "under_3_5"], under_3_5: ["over_3_5", "under_3_5"],
+          btts_yes: ["goal", "no_goal"], btts_no: ["goal", "no_goal"]
+        };
+        const addCandidate = (market, probability, sampleSize, label) => {
+          const oddsKey = oddsKeys[market];
+          const odds = oddsKey ? sisalEvent.markets[oddsKey] : null;
+          if (!Number.isFinite(Number(odds)) || Number(odds) <= 1) return;
           const value = Number(probability);
           if (!Number.isFinite(value) || value < minProbability || value > 100) return;
+          const pair = pairedMarkets[market] || [];
+          const pairOdds = pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1);
+          const rawImplied = 1 / Number(odds);
+          const pairTotal = pairOdds.reduce((sum, odd) => sum + 1 / odd, 0);
+          const marketProbability = pairTotal > 0 ? (rawImplied / pairTotal) * 100 : null;
           candidates.push({
-            match_id: match.id,
-            league: match.league_name,
-            home_team: match.home_team,
-            away_team: match.away_team,
-            market,
-            label,
-            probability: Number(value.toFixed(2)),
-            source,
-            sample_size: sampleSize ?? null
+            match_id: match.id, league: match.league_name,
+            home_team: match.home_team, away_team: match.away_team,
+            market, label, probability: Number(value.toFixed(2)),
+            model_probability: Number(value.toFixed(2)),
+            sisal_odds: Number(Number(odds).toFixed(2)),
+            market_probability: marketProbability === null ? null : Number(marketProbability.toFixed(2)),
+            probability_edge: marketProbability === null ? null : Number((value - marketProbability).toFixed(2)),
+            source: "poisson+sisal", sample_size: sampleSize ?? null
           });
         };
 
         for (const [market, probability] of Object.entries(prediction.probabilities)) {
-          addCandidate(market, probability, "poisson", prediction.samples?.home && prediction.samples?.away
-            ? Math.min(prediction.samples.home, prediction.samples.away) : null, marketLabels[market] || market);
+          addCandidate(market, probability,
+            prediction.samples?.home && prediction.samples?.away ? Math.min(prediction.samples.home, prediction.samples.away) : null,
+            marketLabels[market] || market);
         }
 
         // Solo mercati standard del modello Poisson: niente cartellini, corner,
@@ -2535,7 +2584,7 @@ app.get(
         selections: selected,
         diagnostics,
         warning:
-          "Probabilità stimate dal modello Poisson, non garanzie e non quote Sisal. È selezionato al massimo un mercato per partita per ridurre le correlazioni. La disponibilità effettiva del mercato va verificata nel palinsesto Sisal."
+          "Probabilità stimate dal modello Poisson e quote lette dal PDF ufficiale Sisal. Le quote non garantiscono esiti; la probabilità combinata è una stima semplificata e non considera tutte le correlazioni."
       });
     } catch (error) {
       handleError(res, error);
