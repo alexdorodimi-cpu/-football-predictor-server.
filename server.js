@@ -618,102 +618,6 @@ function runMonteCarlo(matrix, iterations = 10000) {
 }
 
 
-function bootstrapWeightedAverage(sample, key) {
-  if (!sample.length) return 0;
-  const resampled = Array.from(
-    { length: sample.length },
-    () => sample[Math.floor(Math.random() * sample.length)]
-  );
-  return weightedAverage(resampled, key);
-}
-
-function randomPoisson(lambda) {
-  const limit = Math.exp(-Math.max(0.01, lambda));
-  let product = 1;
-  let count = 0;
-  do {
-    count++;
-    product *= Math.random();
-  } while (product > limit);
-  return count - 1;
-}
-
-// Modello ibrido: bootstrap delle statistiche recenti + simulazione dei gol.
-// Le lambda avanzate Poisson restano il centro; il bootstrap misura
-// l'incertezza dovuta al campione limitato delle ultime partite.
-function runHybridMonteCarlo(
-  homeSample,
-  awaySample,
-  homeLambda,
-  awayLambda,
-  baselineHomeFor,
-  baselineHomeAgainst,
-  baselineAwayFor,
-  baselineAwayAgainst,
-  iterations = 20000
-) {
-  const counts = {
-    "1": 0, "X": 0, "2": 0,
-    over_1_5: 0, under_1_5: 0,
-    over_2_5: 0, under_2_5: 0,
-    over_3_5: 0, under_3_5: 0,
-    btts_yes: 0, btts_no: 0
-  };
-  const scores = new Map();
-
-  const baseHome = Math.max(0.1, baselineHomeFor + baselineAwayAgainst);
-  const baseAway = Math.max(0.1, baselineAwayFor + baselineHomeAgainst);
-
-  for (let i = 0; i < iterations; i++) {
-    const sampledHomeFor = bootstrapWeightedAverage(homeSample, "scored");
-    const sampledHomeAgainst = bootstrapWeightedAverage(homeSample, "conceded");
-    const sampledAwayFor = bootstrapWeightedAverage(awaySample, "scored");
-    const sampledAwayAgainst = bootstrapWeightedAverage(awaySample, "conceded");
-
-    const homeFactor = Math.max(0.35, Math.min(2.5,
-      (sampledHomeFor + sampledAwayAgainst) / baseHome
-    ));
-    const awayFactor = Math.max(0.35, Math.min(2.5,
-      (sampledAwayFor + sampledHomeAgainst) / baseAway
-    ));
-    const simulatedHomeLambda = Math.max(0.1, Math.min(5, homeLambda * homeFactor));
-    const simulatedAwayLambda = Math.max(0.1, Math.min(5, awayLambda * awayFactor));
-
-    const home = randomPoisson(simulatedHomeLambda);
-    const away = randomPoisson(simulatedAwayLambda);
-    const total = home + away;
-    const score = `${home}-${away}`;
-
-    if (home > away) counts["1"]++;
-    else if (home === away) counts.X++;
-    else counts["2"]++;
-
-    if (total >= 2) counts.over_1_5++; else counts.under_1_5++;
-    if (total >= 3) counts.over_2_5++; else counts.under_2_5++;
-    if (total >= 4) counts.over_3_5++; else counts.under_3_5++;
-    if (home > 0 && away > 0) counts.btts_yes++; else counts.btts_no++;
-    scores.set(score, (scores.get(score) || 0) + 1);
-  }
-
-  const probabilities = Object.fromEntries(
-    Object.entries(counts).map(([key, value]) => [key, percent(value / iterations)])
-  );
-  const topExactScores = [...scores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([score, count]) => ({
-      score,
-      probability: percent(count / iterations)
-    }));
-
-  return {
-    iterations,
-    method: "Bootstrap delle ultime 10 partite + simulazione Poisson dei gol",
-    probabilities,
-    top_exact_scores: topExactScores
-  };
-}
-
 function percent(value) {
   return Number((value * 100).toFixed(1));
 }
@@ -1103,53 +1007,56 @@ function calculatePrediction(fixture, history) {
   const overallHomeLambda = (homeFor + awayAgainst) / 2;
   const overallAwayLambda = (awayFor + homeAgainst) / 2;
 
-  // Medie specifiche casa e trasferta.
-  const homeVenueReady = homeVenueSample.length >= 3;
-  const awayVenueReady = awayVenueSample.length >= 3;
-
-  const homeVenueFor = homeVenueReady
-    ? weightedAverage(homeVenueSample, "scored")
-    : homeFor;
-
-  const homeVenueAgainst = homeVenueReady
-    ? weightedAverage(homeVenueSample, "conceded")
-    : homeAgainst;
-
-  const awayVenueFor = awayVenueReady
-    ? weightedAverage(awayVenueSample, "scored")
-    : awayFor;
-
-  const awayVenueAgainst = awayVenueReady
-    ? weightedAverage(awayVenueSample, "conceded")
-    : awayAgainst;
+  // Shrinkage bayesiano: regolarizza le medie della squadra verso
+  // quelle del campionato per ridurre l'effetto di campioni piccoli.
+  const PRIOR_MATCHES = 3;
+  const shrink = (observed, prior, sampleCount) =>
+    (observed * sampleCount + prior * PRIOR_MATCHES) /
+    (sampleCount + PRIOR_MATCHES);
 
   const safeHomeLeague = Math.max(0.4, leagueHomeAverage);
   const safeAwayLeague = Math.max(0.4, leagueAwayAverage);
+  const homeVenueReady = homeVenueSample.length >= 3;
+  const awayVenueReady = awayVenueSample.length >= 3;
 
+  const homeAttack = shrink(homeFor, safeHomeLeague, homeSample.length);
+  const homeDefense = shrink(homeAgainst, safeAwayLeague, homeSample.length);
+  const awayAttack = shrink(awayFor, safeAwayLeague, awaySample.length);
+  const awayDefense = shrink(awayAgainst, safeHomeLeague, awaySample.length);
+
+  const homeVenueFor = shrink(
+    homeVenueReady ? weightedAverage(homeVenueSample, "scored") : homeAttack,
+    homeAttack, homeVenueSample.length
+  );
+  const homeVenueAgainst = shrink(
+    homeVenueReady ? weightedAverage(homeVenueSample, "conceded") : homeDefense,
+    homeDefense, homeVenueSample.length
+  );
+  const awayVenueFor = shrink(
+    awayVenueReady ? weightedAverage(awayVenueSample, "scored") : awayAttack,
+    awayAttack, awayVenueSample.length
+  );
+  const awayVenueAgainst = shrink(
+    awayVenueReady ? weightedAverage(awayVenueSample, "conceded") : awayDefense,
+    awayDefense, awayVenueSample.length
+  );
+
+  const overallHomeLambda =
+    safeHomeLeague * (homeAttack / safeHomeLeague) * (awayDefense / safeAwayLeague);
+  const overallAwayLambda =
+    safeAwayLeague * (awayAttack / safeAwayLeague) * (homeDefense / safeHomeLeague);
   const venueHomeLambda =
-    safeHomeLeague *
-    (homeVenueFor / safeHomeLeague) *
-    (awayVenueAgainst / safeHomeLeague);
-
+    safeHomeLeague * (homeVenueFor / safeHomeLeague) * (awayVenueAgainst / safeAwayLeague);
   const venueAwayLambda =
-  safeAwayLeague *
-  (awayVenueFor / safeAwayLeague) *
-  (homeVenueAgainst / safeAwayLeague);
+    safeAwayLeague * (awayVenueFor / safeAwayLeague) * (homeVenueAgainst / safeHomeLeague);
 
-  // 40% forma generale e 60% rendimento casa/trasferta.
-  const homeLambda = Math.max(
-    0.10,
-    Math.min(5,
-      0.4 * overallHomeLambda + 0.6 * venueHomeLambda
-    )
-  );
-
-  const awayLambda = Math.max(
-    0.10,
-    Math.min(5,
-      0.4 * overallAwayLambda + 0.6 * venueAwayLambda
-    )
-  );
+  // 30% forza generale + 70% rendimento casa/trasferta.
+  const homeLambda = Math.max(0.10, Math.min(4.5,
+    0.3 * overallHomeLambda + 0.7 * venueHomeLambda
+  ));
+  const awayLambda = Math.max(0.10, Math.min(4.5,
+    0.3 * overallAwayLambda + 0.7 * venueAwayLambda
+  ));
 
   // Matrice delle probabilità Poisson.
   const matrix = buildGoalModel(homeLambda, awayLambda);
@@ -1195,20 +1102,7 @@ function calculatePrediction(fixture, history) {
     btts_no: percent(1 - bttsYes)
   };
 
-  const hybridMonteCarlo = runHybridMonteCarlo(
-    homeSample,
-    awaySample,
-    homeLambda,
-    awayLambda,
-    homeFor,
-    homeAgainst,
-    awayFor,
-    awayAgainst,
-    20000
-  );
-  // Il modello ibrido usa le probabilità prodotte dal bootstrap + Monte Carlo.
-  // Poisson resta disponibile separatamente per il confronto nel backtest.
-  const probabilities = hybridMonteCarlo.probabilities;
+  const probabilities = poissonProbabilities;
 
   // Affidabilità indicativa dei mercati.
   const reliability = {};
@@ -1228,13 +1122,12 @@ function calculatePrediction(fixture, history) {
       score: `${item.home}-${item.away}`,
       probability: percent(item.probability)
     }));
-  const exactScores = hybridMonteCarlo.top_exact_scores;
+  const exactScores = poissonExactScores;
 
   return {
     ok: true,
 
-    model: "Poisson ponderato con rendimento casa/trasferta (modello principale)",
-    experimental_model: "Hybrid Poisson + Monte Carlo con bootstrap statistico",
+    model: "Poisson ponderato con shrinkage bayesiano e rendimento casa/trasferta",
 
     expected_goals: {
       home: Number(homeLambda.toFixed(2)),
@@ -1243,9 +1136,7 @@ function calculatePrediction(fixture, history) {
     },
 
     probabilities,
-    poisson_probabilities: poissonProbabilities,
     monte_carlo: monteCarlo,
-    hybrid_monte_carlo: hybridMonteCarlo,
     reliability,
 
     samples: {
@@ -1864,9 +1755,7 @@ app.get(
         samples: prediction.samples,
         expected_goals: prediction.expected_goals,
         probabilities: prediction.probabilities,
-        poisson_probabilities: prediction.poisson_probabilities,
         monte_carlo: prediction.monte_carlo,
-        hybrid_monte_carlo: prediction.hybrid_monte_carlo,
         stats_monte_carlo: statsMonteCarlo,
         reliability: prediction.reliability,
         exact_scores: prediction.exact_scores,
@@ -2036,7 +1925,7 @@ app.get(
             btts_yes: actualBtts
           },
           probabilities: p,
-          poisson_probabilities: prediction.poisson_probabilities || null
+          probabilities: p
         });
       }
 
@@ -2208,8 +2097,7 @@ app.get(
         };
       }
 
-      const hybridMetrics = buildModelMetrics("probabilities");
-      const poissonMetrics = buildModelMetrics("poisson_probabilities");
+      const poissonMetrics = buildModelMetrics("probabilities");
       const accuracyByMarket = poissonMetrics;
 
       res.json({
@@ -2229,30 +2117,7 @@ app.get(
         },
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
-        model_comparison: {
-          evaluation_basis: "Stesse partite e stessi risultati reali per entrambi i modelli",
-          hybrid: hybridMetrics,
-          poisson: poissonMetrics,
-          better_by_brier_score: Object.fromEntries(
-            ["1X2", "over_1_5", "over_2_5", "over_3_5", "btts_yes"].map(market => {
-              const hybridBrier = market === "1X2"
-                ? hybridMetrics[market].brier_score_normalized
-                : hybridMetrics[market].brier_score;
-              const poissonBrier = market === "1X2"
-                ? poissonMetrics[market].brier_score_normalized
-                : poissonMetrics[market].brier_score;
-              return [market,
-                hybridBrier === null || poissonBrier === null
-                  ? "DATI_INSUFFICIENTI"
-                  : hybridBrier < poissonBrier
-                    ? "HYBRID"
-                    : poissonBrier < hybridBrier
-                      ? "POISSON"
-                      : "PARI"
-              ];
-            })
-          )
-        },
+        model: "Poisson con shrinkage bayesiano",
         results
       });
     } catch (error) {
