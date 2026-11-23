@@ -1755,8 +1755,8 @@ async function getFixturePlayerForm(fixture, history) {
       ? (fixture.home_team_id || getHomeId(fixture))
       : (fixture.away_team_id || getAwayId(fixture));
     const normalizedTeamName = String(side.teamName || "")
-      .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
-      .trim().toLowerCase().replace(/\\s+/g, " ");
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .trim().toLowerCase().replace(/\s+/g, " ");
 
     const teamMatches = (history || [])
       .filter(match => {
@@ -1769,8 +1769,8 @@ async function getFixturePlayerForm(fixture, history) {
             String(awayId || "") === String(currentTeamId)
           : [match.home_team, match.away_team].some(name =>
               String(name || "").normalize("NFD")
-                .replace(/[\\u0300-\\u036f]/g, "")
-                .trim().toLowerCase().replace(/\\s+/g, " ") === normalizedTeamName
+                .replace(/[\u0300-\u036f]/g, "")
+                .trim().toLowerCase().replace(/\s+/g, " ") === normalizedTeamName
             );
         return date && new Date(date) < beforeDate && isFinished(match) && sameTeam && match.id;
       })
