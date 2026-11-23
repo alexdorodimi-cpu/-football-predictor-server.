@@ -2381,7 +2381,6 @@ app.get(
   async (req, res) => {
     try {
       const date = String(req.query.date || "").trim();
-
       if (!validDate(date)) {
         return res.status(400).json({
           ok: false,
@@ -2389,17 +2388,27 @@ app.get(
         });
       }
 
-      const maxMatches = Math.min(
-        Math.max(Number(req.query.max_matches) || 10, 1),
-        30
-      );
-
+      const profiles = {
+        prudente: { minProbability: 75, maxSelections: 5, maxPerMatch: 1 },
+        equilibrata: { minProbability: 65, maxSelections: 5, maxPerMatch: 2 },
+        rischiosa: { minProbability: 55, maxSelections: 5, maxPerMatch: 2 }
+      };
+      const mode = String(req.query.mode || "equilibrata").toLowerCase();
+      if (!profiles[mode]) {
+        return res.status(400).json({
+          ok: false,
+          error: "Modalità non valida. Usa prudente, equilibrata o rischiosa."
+        });
+      }
+      const profile = profiles[mode];
+      const maxMatches = Math.min(Math.max(Number(req.query.max_matches) || 10, 1), 20);
       const minProbability = Math.min(
-        Math.max(
-          Number(req.query.min_probability) || 65,
-          50
-        ),
+        Math.max(Number(req.query.min_probability) || profile.minProbability, 50),
         95
+      );
+      const maxSelections = Math.min(
+        Math.max(Number(req.query.max_selections) || profile.maxSelections, 1),
+        10
       );
 
       const { data: fixtures, error } = await supabase
@@ -2408,86 +2417,115 @@ app.get(
         .gte("match_date", `${date}T00:00:00`)
         .lt("match_date", `${date}T23:59:59.999`)
         .order("match_date", { ascending: true });
-
       if (error) throw error;
 
-      const selected = [];
       const historyCache = {};
+      const candidates = [];
+      const diagnostics = {
+        fixtures_found: (fixtures || []).length,
+        fixtures_analyzed: 0,
+        skipped_insufficient_data: 0,
+        stats_markets_available: 0
+      };
 
-      for (const match of fixtures || []) {
-        if (selected.length >= maxMatches) break;
-
+      for (const match of (fixtures || []).slice(0, maxMatches)) {
         const leagueId = String(match.league_id);
         const season = String(match.season);
         const cacheKey = `${leagueId}_${season}`;
 
         if (!historyCache[cacheKey]) {
-          const { data, error: historyError } =
-            await supabase
-              .from("matches")
-              .select("*")
-              .eq("league_id", leagueId)
-              .eq("season", season)
-              .not("home_goals", "is", null)
-              .not("away_goals", "is", null)
-              .order("match_date", { ascending: false })
-              .limit(500);
-
+          const { data, error: historyError } = await supabase
+            .from("matches")
+            .select("*")
+            .eq("league_id", leagueId)
+            .eq("season", season)
+            .not("home_goals", "is", null)
+            .not("away_goals", "is", null)
+            .order("match_date", { ascending: false })
+            .limit(500);
           if (historyError) throw historyError;
-
           historyCache[cacheKey] = data || [];
         }
 
-        const prediction = calculatePrediction(
-          match,
-          historyCache[cacheKey]
-        );
+        const history = historyCache[cacheKey];
+        const prediction = calculatePrediction(match, history);
+        if (!prediction?.probabilities) {
+          diagnostics.skipped_insufficient_data++;
+          continue;
+        }
+        diagnostics.fixtures_analyzed++;
 
-        if (!prediction?.probabilities) continue;
+        const addCandidate = (market, probability, source, sampleSize, label) => {
+          const value = Number(probability);
+          if (!Number.isFinite(value) || value < minProbability || value > 100) return;
+          candidates.push({
+            match_id: match.id,
+            league: match.league_name,
+            home_team: match.home_team,
+            away_team: match.away_team,
+            market,
+            label,
+            probability: Number(value.toFixed(2)),
+            source,
+            sample_size: sampleSize ?? null
+          });
+        };
 
-        const candidates = Object.entries(
-          prediction.probabilities
-        )
-          .filter(([market, probability]) =>
-            Number.isFinite(Number(probability)) &&
-            Number(probability) >= minProbability
-          )
-          .sort((a, b) => Number(b[1]) - Number(a[1]));
+        for (const [market, probability] of Object.entries(prediction.probabilities)) {
+          addCandidate(market, probability, "poisson", prediction.samples?.home && prediction.samples?.away
+            ? Math.min(prediction.samples.home, prediction.samples.away) : null, market);
+        }
 
-        if (!candidates.length) continue;
-
-        const [market, probability] = candidates[0];
-
-        selected.push({
-          match_id: match.id,
-          league: match.league_name,
-          home_team: match.home_team,
-          away_team: match.away_team,
-          market,
-          probability: Number(probability)
-        });
+        // Le statistiche aggiuntive sono recuperate solo per le prime 8 partite,
+        // per contenere il numero di richieste verso PitchAPI.
+        if (diagnostics.fixtures_analyzed <= 8) {
+          const stats = await runStatsMonteCarlo(match, history, 10000);
+          for (const [field, market] of Object.entries(stats.markets || {})) {
+            if (!market.available) continue;
+            diagnostics.stats_markets_available++;
+            for (const [line, overProbability] of Object.entries(market.over_probabilities || {})) {
+              addCandidate(`${field}_over_${line}`, overProbability, "monte_carlo_bootstrap",
+                Math.min(market.samples.home, market.samples.away), `${market.label} Over ${line}`);
+              addCandidate(`${field}_under_${line}`, 100 - Number(overProbability), "monte_carlo_bootstrap",
+                Math.min(market.samples.home, market.samples.away), `${market.label} Under ${line}`);
+            }
+          }
+        }
       }
 
-      const combinedProbability = selected.length
-        ? selected.reduce(
-            (total, item) =>
-              total * item.probability / 100,
-            1
-          ) * 100
+      // Ordina per probabilità, poi limita mercati ripetuti della stessa partita.
+      candidates.sort((a, b) => b.probability - a.probability);
+      const selected = [];
+      const perMatch = new Map();
+      const marketKeys = new Set();
+      for (const item of candidates) {
+        if (selected.length >= maxSelections) break;
+        const count = perMatch.get(item.match_id) || 0;
+        const uniqueKey = `${item.match_id}:${item.market}`;
+        if (count >= profile.maxPerMatch || marketKeys.has(uniqueKey)) continue;
+        selected.push(item);
+        perMatch.set(item.match_id, count + 1);
+        marketKeys.add(uniqueKey);
+      }
+
+      const naiveCombinedProbability = selected.length
+        ? selected.reduce((total, item) => total * item.probability / 100, 1) * 100
         : 0;
 
       res.json({
         ok: true,
         date,
-        max_matches: maxMatches,
+        mode,
         minimum_probability: minProbability,
-        selected_matches: selected.length,
-        estimated_combined_probability: Number(
-          combinedProbability.toFixed(4)
-        ),
+        max_matches: maxMatches,
+        max_selections: maxSelections,
+        selected_matches: new Set(selected.map(item => item.match_id)).size,
+        selected_selections: selected.length,
+        naive_combined_probability: Number(naiveCombinedProbability.toFixed(4)),
         selections: selected,
+        diagnostics,
         warning:
-          "Le probabilità sono stime del modello, non garanzie. Le selezioni non sono necessariamente indipendenti."
+          "Probabilità stimate, non garanzie. La probabilità combinata è solo un prodotto teorico: mercati della stessa partita e partite diverse possono essere correlati. Le selezioni Monte Carlo usano bootstrap di statistiche storiche e non quote di mercato."
       });
     } catch (error) {
       handleError(res, error);
