@@ -39,6 +39,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: automatic-backtest-report
-          path: reports/automatic-backtest-latest.json
+          path: |
+            reports/automatic-backtest-latest.json
+            reports/optimization-candidate.json
           if-no-files-found: ignore
           retention-days: 90
