@@ -925,7 +925,10 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
 
   for (const [market, probability] of Object.entries(probabilities)) {
     reliability[market] = getReliability(
-      sampleSize,
+      {
+        home: homeSample.length,
+        away: awaySample.length
+      },
       homeVenueSample.length,
       awayVenueSample.length,
       leagueSample.length
