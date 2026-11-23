@@ -86,7 +86,7 @@ async function run() {
     console.log("SKIP  test pronostico: TEST_MATCH_ID non configurato.");
   }
 
-  console.log(`\\nRisultato: ${failures === 0 ? "TUTTI I TEST SUPERATI" : `${failures} TEST FALLITI`}`);
+  console.log(`\nRisultato: ${failures === 0 ? "TUTTI I TEST SUPERATI" : `${failures} TEST FALLITI`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 }
 
