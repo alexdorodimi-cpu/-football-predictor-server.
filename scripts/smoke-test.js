@@ -86,6 +86,18 @@ async function run() {
     console.log("SKIP  test pronostico: TEST_MATCH_ID non configurato.");
   }
 
+  const leagueId = process.env.TEST_LEAGUE_ID || "l_0ALvwF";
+  const backtest = await request(
+    `/api/backtest/${encodeURIComponent(leagueId)}?limit=10&season=2026%2F2027`,
+    { headers: { Authorization: `Bearer ${TOKEN}` } }
+  );
+  check("endpoint backtest", backtest.status === 200 && backtest.body?.ok === true,
+    `HTTP ${backtest.status}`);
+  check("metriche avanzate backtest", backtest.body?.advanced_metrics?.["1X2"] != null &&
+    backtest.body?.advanced_metrics?.expected_goals_error != null &&
+    backtest.body?.advanced_metrics?.exact_score_top_1 != null,
+    "mancano log_loss, errori gol attesi o metrica risultato esatto");
+
   console.log(`\nRisultato: ${failures === 0 ? "TUTTI I TEST SUPERATI" : `${failures} TEST FALLITI`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 }
