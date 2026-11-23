@@ -1,0 +1,44 @@
+name: Football Predictor historical statistics import
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/import-historical-statistics.js"
+      - ".github/workflows/import-historical-statistics.yml"
+      - "server.js"
+  workflow_dispatch:
+    inputs:
+      league_id:
+        description: "League ID (default: Serie A)"
+        required: false
+        default: "l_0ALvwF"
+      start_offset:
+        description: "Resume from this match offset"
+        required: false
+        default: "0"
+  schedule:
+    - cron: "30 4 * * 1"
+
+concurrency:
+  group: football-predictor-statistics-import
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  import-statistics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      BASE_URL: https://football-predictor-server-1-b267.onrender.com
+      PREDICTOR_ACCESS_TOKEN: ${{ secrets.PREDICTOR_ACCESS_TOKEN }}
+      LEAGUE_ID: ${{ github.event.inputs.league_id || 'l_0ALvwF' }}
+      START_OFFSET: ${{ github.event.inputs.start_offset || '0' }}
+      BATCH_SIZE: "50"
+      REQUEST_PAUSE_MS: "500"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import all available historical match statistics
+        run: node scripts/import-historical-statistics.js
