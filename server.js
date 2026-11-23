@@ -1204,7 +1204,7 @@ function calculatePrediction(fixture, history) {
       score: `${item.home}-${item.away}`,
       probability: percent(item.probability)
     }));
-  const exactScores = poissonExactScores;
+  const exactScores = hybridMonteCarlo.top_exact_scores;
 
   return {
     ok: true,
@@ -1824,7 +1824,9 @@ app.get(
         samples: prediction.samples,
         expected_goals: prediction.expected_goals,
         probabilities: prediction.probabilities,
+        poisson_probabilities: prediction.poisson_probabilities,
         monte_carlo: prediction.monte_carlo,
+        hybrid_monte_carlo: prediction.hybrid_monte_carlo,
         stats_monte_carlo: statsMonteCarlo,
         reliability: prediction.reliability,
         exact_scores: prediction.exact_scores,
