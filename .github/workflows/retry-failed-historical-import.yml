@@ -1,0 +1,79 @@
+name: Football Predictor recovery historical import
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: football-predictor-historical-recovery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover-failed-leagues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Retry Bundesliga 2 and Champions League imports
+        env:
+          BASE_URL: https://football-predictor-server-1-b267.onrender.com
+          PREDICTOR_ACCESS_TOKEN: ${{ secrets.PREDICTOR_ACCESS_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const base = process.env.BASE_URL.replace(/\/$/, '');
+          const token = process.env.PREDICTOR_ACCESS_TOKEN;
+          if (!token) throw new Error('PREDICTOR_ACCESS_TOKEN mancante');
+
+          const leagues = [
+            { name: '2. Bundesliga', id: 'l_3hvsne' },
+            { name: 'Champions League', id: 'l_0bfbkO' }
+          ];
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          let failed = 0;
+
+          for (const league of leagues) {
+            let completed = false;
+            for (let attempt = 1; attempt <= 4 && !completed; attempt++) {
+              try {
+                const response = await fetch(
+                  `${base}/api/sync/league/${encodeURIComponent(league.id)}/history`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      Accept: 'application/json',
+                      Authorization: `Bearer ${token}`
+                    },
+                    signal: AbortSignal.timeout(180000)
+                  }
+                );
+                const raw = await response.text();
+                let body;
+                try { body = JSON.parse(raw); }
+                catch { throw new Error(`HTTP ${response.status}: risposta non JSON ${raw.slice(0, 250)}`); }
+                if (!response.ok || body.ok !== true) {
+                  throw new Error(`HTTP ${response.status}: ${body.error || raw.slice(0, 250)}`);
+                }
+                console.log(JSON.stringify({
+                  league: league.name,
+                  attempt,
+                  seasons: body.seasons_imported,
+                  received_matches: body.received_matches,
+                  upserted_rows: body.upserted_rows
+                }));
+                completed = true;
+              } catch (error) {
+                console.error(`Tentativo ${attempt}/4 fallito per ${league.name}: ${error.message}`);
+                if (attempt < 4) await sleep(attempt * 5000);
+              }
+            }
+            if (!completed) failed++;
+            await sleep(1000);
+          }
+
+          if (failed) throw new Error(`${failed} campionati non recuperati dopo 4 tentativi`);
+          console.log('Recupero storico completato per entrambi i campionati.');
+          NODE
