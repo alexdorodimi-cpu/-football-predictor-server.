@@ -543,6 +543,7 @@ function sampleForTeam(
 
       return (
         date &&
+        isFinished(match) &&
         new Date(date) < new Date(beforeDate) &&
         (
           String(
@@ -612,6 +613,7 @@ function sampleForTeamByName(
 
       return (
         date &&
+        isFinished(match) &&
         new Date(date) < new Date(beforeDate) &&
         (home === target || away === target) &&
         homeGoals !== null &&
@@ -657,6 +659,7 @@ function sampleForTeamByVenue(matches, teamName, beforeDate, venue) {
 
       if (
         !date ||
+        !isFinished(match) ||
         new Date(date) >= new Date(beforeDate) ||
         homeGoals === null ||
         awayGoals === null
@@ -726,6 +729,7 @@ function calculatePrediction(fixture, history) {
 
       return (
         date &&
+        isFinished(match) &&
         new Date(date) < new Date(fixtureDate) &&
         getNumber(match.home_goals) !== null &&
         getNumber(match.away_goals) !== null
@@ -1583,6 +1587,7 @@ app.get(
         new Date(a.match_date) - new Date(b.match_date)
       );
       const dateMatches = history.filter(match => {
+        if (!isFinished(match)) return false;
         const day = String(match.match_date || "").slice(0, 10);
         if (targetDate) return day === targetDate;
         if (fromDate && day < fromDate) return false;
