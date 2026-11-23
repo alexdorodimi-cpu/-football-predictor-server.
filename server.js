@@ -915,7 +915,30 @@ function calculatePrediction(fixture, history, lineupImpact = null) {
     over_3_5: percent(over(3)),
     under_3_5: percent(under(3)),
     btts_yes: percent(bttsYes),
-    btts_no: percent(1 - bttsYes)
+    btts_no: percent(1 - bttsYes),
+    under_0_5: percent(sum(x => x.home + x.away === 0)),
+    over_0_5: percent(sum(x => x.home + x.away >= 1)),
+    under_4_5: percent(sum(x => x.home + x.away <= 4)),
+    over_4_5: percent(sum(x => x.home + x.away >= 5)),
+    double_chance_1x: percent(homeWin + draw),
+    double_chance_x2: percent(draw + awayWin),
+    double_chance_12: percent(homeWin + awayWin),
+    multigoal_1_2: percent(sum(x => x.home + x.away >= 1 && x.home + x.away <= 2)),
+    multigoal_1_3: percent(sum(x => x.home + x.away >= 1 && x.home + x.away <= 3)),
+    multigoal_1_4: percent(sum(x => x.home + x.away >= 1 && x.home + x.away <= 4)),
+    multigoal_2_3: percent(sum(x => x.home + x.away >= 2 && x.home + x.away <= 3)),
+    multigoal_2_4: percent(sum(x => x.home + x.away >= 2 && x.home + x.away <= 4)),
+    multigoal_2_5: percent(sum(x => x.home + x.away >= 2 && x.home + x.away <= 5)),
+    multigoal_3_4: percent(sum(x => x.home + x.away >= 3 && x.home + x.away <= 4)),
+    combo_1x_over_1_5: percent(sum(x => x.home >= x.away && x.home + x.away >= 2)),
+    combo_1x_under_2_5: percent(sum(x => x.home >= x.away && x.home + x.away <= 2)),
+    combo_x2_over_1_5: percent(sum(x => x.home <= x.away && x.home + x.away >= 2)),
+    combo_x2_under_2_5: percent(sum(x => x.home <= x.away && x.home + x.away <= 2)),
+    combo_12_over_1_5: percent(sum(x => x.home !== x.away && x.home + x.away >= 2)),
+    combo_12_under_2_5: percent(sum(x => x.home !== x.away && x.home + x.away <= 2)),
+    dc_combo_1x_multigoal_1_4: percent(sum(x => x.home >= x.away && x.home + x.away >= 1 && x.home + x.away <= 4)),
+    dc_combo_x2_multigoal_1_4: percent(sum(x => x.home <= x.away && x.home + x.away >= 1 && x.home + x.away <= 4)),
+    dc_combo_12_multigoal_1_4: percent(sum(x => x.home !== x.away && x.home + x.away >= 1 && x.home + x.away <= 4))
   };
 
   const probabilities = poissonProbabilities;
