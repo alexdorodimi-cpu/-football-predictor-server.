@@ -365,9 +365,15 @@ app.post(
       const offset = Math.max(0, Number.parseInt(req.query.offset || "0", 10) || 0);
       const batchSize = Math.min(100, Math.max(1, Number.parseInt(req.query.batch_size || "50", 10) || 50));
       const { data: matches, error: matchesError } = await supabase
-        .from("matches").select("id,league_id,match_date")
-        .eq("league_id", leagueId).in("status", ["FT", "AET", "PENS", "FINISHED", "COMPLETED"])
+        .from("matches").select("id,league_id,match_date,home_goals,away_goals,status")
+        .eq("league_id", leagueId)
+        // Lo storico viene importato da PitchAPI con status=played, che può
+        // essere diverso dai codici FT/FINISHED. I punteggi non nulli sono
+        // il criterio affidabile per identificare partite concluse.
+        .not("home_goals", "is", null)
+        .not("away_goals", "is", null)
         .not("match_date", "is", null)
+        .lte("match_date", new Date().toISOString())
         .order("match_date", { ascending: true }).range(offset, offset + batchSize - 1);
       if (matchesError) throw matchesError;
       const rows = await mapWithConcurrency(matches || [], 5, async match => {
