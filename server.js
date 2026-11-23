@@ -2613,8 +2613,7 @@ function parseSisalOddsPdfText(text) {
     const liveIndex = beforeOdds.lastIndexOf("L");
     if (liveIndex < 2) continue;
     const teams = beforeOdds.slice(0, liveIndex).join(" ").trim();
-    const teamParts = teams.match(/^(.+?)\s+(.+)$/);
-    if (!teamParts) continue;
+    if (!teams) continue;
 
     const markets = {};
     SISAL_ODDS_COLUMNS.forEach((key, index) => {
@@ -2627,8 +2626,7 @@ function parseSisalOddsPdfText(text) {
       competition_code: prefix[2],
       schedule_id: prefix[3],
       event_id: prefix[4],
-      home_team: teamParts[1].trim(),
-      away_team: teamParts[2].trim(),
+      team_text: teams,
       markets
     });
   }
@@ -2659,7 +2657,8 @@ app.get("/api/sisal/odds", async (req, res) => {
 
     const contentType = response.headers.get("content-type") || "";
     const buffer = Buffer.from(await response.arrayBuffer());
-    if (!contentType.toLowerCase().includes("pdf") || buffer.length < 1000 || buffer.length > 15 * 1024 * 1024) {
+    const isPdf = buffer.subarray(0, 5).toString("ascii") === "%PDF-";
+    if (!isPdf || buffer.length < 1000 || buffer.length > 15 * 1024 * 1024) {
       return res.status(502).json({
         ok: false, available: false,
         error: "La risposta Sisal non è un PDF valido o supera il limite di dimensione."
