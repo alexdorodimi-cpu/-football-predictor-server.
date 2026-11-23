@@ -1522,11 +1522,32 @@ app.get(
       const targetDate = req.query.date
         ? String(req.query.date).trim()
         : null;
+      const fromDate = req.query.from
+        ? String(req.query.from).trim()
+        : null;
+      const toDate = req.query.to
+        ? String(req.query.to).trim()
+        : null;
 
-      if (targetDate && !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      const validDate = value =>
+        !value || /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+      if (!validDate(targetDate) || !validDate(fromDate) || !validDate(toDate)) {
         return res.status(400).json({
           ok: false,
           error: "Data non valida. Usa il formato YYYY-MM-DD."
+        });
+      }
+      if (targetDate && (fromDate || toDate)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Usa date singole oppure un intervallo, non entrambi."
+        });
+      }
+      if (fromDate && toDate && fromDate > toDate) {
+        return res.status(400).json({
+          ok: false,
+          error: "La data iniziale deve precedere quella finale."
         });
       }
 
@@ -1561,11 +1582,13 @@ app.get(
       const history = (data || []).sort((a, b) =>
         new Date(a.match_date) - new Date(b.match_date)
       );
-      const dateMatches = targetDate
-        ? history.filter(match =>
-            String(match.match_date || "").slice(0, 10) === targetDate
-          )
-        : history;
+      const dateMatches = history.filter(match => {
+        const day = String(match.match_date || "").slice(0, 10);
+        if (targetDate) return day === targetDate;
+        if (fromDate && day < fromDate) return false;
+        if (toDate && day > toDate) return false;
+        return true;
+      });
       const evaluationMatches = dateMatches.slice(-limit);
       const results = [];
 
@@ -1673,6 +1696,8 @@ app.get(
         league_id: leagueId,
         season,
         target_date: targetDate,
+        from_date: fromDate,
+        to_date: toDate,
         requested_matches: limit,
         available_history_matches: history.length,
         matches_on_target_date: dateMatches.length,
