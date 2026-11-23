@@ -2390,8 +2390,21 @@ app.get(
 
       const profiles = {
         prudente: { minProbability: 75, maxSelections: 5, maxPerMatch: 1 },
-        equilibrata: { minProbability: 65, maxSelections: 5, maxPerMatch: 2 },
-        rischiosa: { minProbability: 55, maxSelections: 5, maxPerMatch: 2 }
+        equilibrata: { minProbability: 65, maxSelections: 5, maxPerMatch: 1 },
+        rischiosa: { minProbability: 55, maxSelections: 5, maxPerMatch: 1 }
+      };
+      const marketLabels = {
+        "1": "Vittoria casa (1)",
+        "X": "Pareggio (X)",
+        "2": "Vittoria ospite (2)",
+        over_1_5: "Over 1.5 gol",
+        under_1_5: "Under 1.5 gol",
+        over_2_5: "Over 2.5 gol",
+        under_2_5: "Under 2.5 gol",
+        over_3_5: "Over 3.5 gol",
+        under_3_5: "Under 3.5 gol",
+        btts_yes: "Entrambe le squadre segnano – Sì",
+        btts_no: "Entrambe le squadre segnano – No"
       };
       const mode = String(req.query.mode || "equilibrata").toLowerCase();
       if (!profiles[mode]) {
@@ -2479,7 +2492,7 @@ app.get(
 
         for (const [market, probability] of Object.entries(prediction.probabilities)) {
           addCandidate(market, probability, "poisson", prediction.samples?.home && prediction.samples?.away
-            ? Math.min(prediction.samples.home, prediction.samples.away) : null, market);
+            ? Math.min(prediction.samples.home, prediction.samples.away) : null, marketLabels[market] || market);
         }
 
         // Solo mercati standard del modello Poisson: niente cartellini, corner,
@@ -2521,7 +2534,7 @@ app.get(
         selections: selected,
         diagnostics,
         warning:
-          "Probabilità stimate, non garanzie. La probabilità combinata è solo un prodotto teorico: mercati della stessa partita e partite diverse possono essere correlati. Le selezioni Monte Carlo usano bootstrap di statistiche storiche e non quote di mercato."
+          "Probabilità stimate dal modello Poisson, non garanzie e non quote Sisal. È selezionato al massimo un mercato per partita per ridurre le correlazioni. La disponibilità effettiva del mercato va verificata nel palinsesto Sisal."
       });
     } catch (error) {
       handleError(res, error);
