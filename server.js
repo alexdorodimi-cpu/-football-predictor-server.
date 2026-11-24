@@ -4630,6 +4630,7 @@ app.get("/api/sync/automatic/status", (req, res) => {
       last_run: automaticStatisticsSyncLastRun,
       last_report: automaticStatisticsSyncLastReport
     },
+    open_matchday_sync: { enabled: Boolean(supabase && ACCESS_TOKEN), running: automaticOpenMatchdayRunning, interval_hours: 24, last_run: automaticOpenMatchdayLastRun, last_report: automaticOpenMatchdayLastReport },
     note: "Sincronizza i risultati conclusi delle stagioni piu' recenti dei campionati gia' presenti in Supabase. Su hosting con sospensione del processo, il job riparte quando il servizio viene riattivato."
   });
 });
@@ -4750,6 +4751,43 @@ app.use((error, req, res, next) => {
   });
 });
 
+// Sincronizzazione giornaliera Open-Matchday tramite endpoint interno autenticato.
+let automaticOpenMatchdayRunning = false;
+let automaticOpenMatchdayLastRun = null;
+let automaticOpenMatchdayLastReport = null;
+async function runAutomaticOpenMatchdaySync() {
+  if (!supabase || !ACCESS_TOKEN || automaticOpenMatchdayRunning) return null;
+  automaticOpenMatchdayRunning = true;
+  const report = { started_at: new Date().toISOString(), competitions_seen: 0, competitions_attempted: 0, competitions_succeeded: 0, csv_rows: 0, strict_matches_matched: 0, matches_with_new_statistics: 0, statistic_fields_imported: 0, existing_values_preserved: 0, unmatched_rows: 0, score_conflicts: 0, ambiguous_matches: 0, errors: [] };
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/oladeeayo/open-matchday/master/LEAGUE_INDEX.md', { headers: { Accept: 'text/markdown' }, signal: AbortSignal.timeout(20000) });
+    if (!response.ok) throw new Error('Indice Open-Matchday HTTP ' + response.status);
+    const [indexText, catalog] = await Promise.all([response.text(), getEuropeanLeagueCatalog()]);
+    const codes = new Set(['ALB','AND','ARM','AUT','AZE','BEL','BIH','BLR','BUL','CRO','CYP','CZE','DEN','ENG','ESP','EST','FIN','FRA','FRO','GEO','GER','GRE','HUN','IRL','ISL','ISR','ITA','KAZ','KOS','LIE','LTU','LUX','LVA','MDA','MKD','MLT','MNE','NED','NIR','NOR','POL','POR','ROU','RUS','SCO','SMR','SRB','SVK','SVN','SWE','SUI','TUR','UKR','WAL','UEFA']);
+    const rows = indexText.split(/\r?\n/).filter(line => /^\| \`[A-Z0-9_]+\` \|/.test(line));
+    report.competitions_seen = rows.length;
+    for (const line of rows) {
+      const cells = line.split('|').map(value => value.trim());
+      const folder = String(cells[1] || '').replace(/^\`|\`$/g, '');
+      const leagueName = cells[2] || '';
+      if (!codes.has(folder.split('_')[0])) continue;
+      const league = catalog.find(item => normalizeExternalTeamName(item.name || item.league_name) === normalizeExternalTeamName(leagueName));
+      if (!league || !/^l_[A-Za-z0-9_-]+$/.test(String(league.id || ''))) continue;
+      report.competitions_attempted++;
+      try {
+        const url = 'http://127.0.0.1:' + PORT + '/api/data-sources/open-matchday/sync?league_id=' + encodeURIComponent(String(league.id)) + '&folder=' + encodeURIComponent(folder) + '&season=2026%2F2027';
+        const result = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + ACCESS_TOKEN, Accept: 'application/json' }, signal: AbortSignal.timeout(90000) });
+        const body = await result.json().catch(() => ({}));
+        if (!result.ok || !body.ok) throw new Error(body.error || ('Endpoint HTTP ' + result.status));
+        report.competitions_succeeded++;
+        for (const key of ['csv_rows','strict_matches_matched','matches_with_new_statistics','statistic_fields_imported','existing_values_preserved','unmatched_rows','score_conflicts','ambiguous_matches']) report[key] += Number(body[key] || 0);
+      } catch (error) { report.errors.push({ folder: folder, league_id: String(league.id), error: error.message }); }
+      await new Promise(resolve => setTimeout(resolve, 1100));
+    }
+  } catch (error) { report.errors.push({ error: error.message }); }
+  finally { report.finished_at = new Date().toISOString(); automaticOpenMatchdayLastRun = report.finished_at; automaticOpenMatchdayLastReport = report; automaticOpenMatchdayRunning = false; console.log('Open-Matchday sync report:', JSON.stringify(report)); }
+  return report;
+}
 // ==========================================
 // AVVIO SERVER
 // Sincronizzazione automatica dei risultati conclusi per i campionati
@@ -4947,6 +4985,8 @@ app.listen(PORT, () => {
       console.error("Sync periodica non riuscita:", error.message)
     );
   }, AUTOMATIC_RESULTS_SYNC_INTERVAL_MS);
+  setTimeout(() => runAutomaticOpenMatchdaySync().catch(error => console.error("Open-Matchday iniziale:", error.message)), 3 * 60 * 1000);
+  setInterval(() => runAutomaticOpenMatchdaySync().catch(error => console.error("Open-Matchday periodico:", error.message)), 24 * 60 * 60 * 1000);
   // Le statistiche vengono recuperate più spesso, a piccoli blocchi, per completare
   // progressivamente lo storico senza lanciare migliaia di richieste tutte insieme.
   setInterval(() => {
