@@ -2803,10 +2803,54 @@ app.get(
         }
       }
 
+      const xgPairs = results.flatMap(result => {
+        const predictedHome = getNumber(result.expected_goals?.home);
+        const predictedAway = getNumber(result.expected_goals?.away);
+        const actualHomeXg = getNumber(result.actual_statistics?.expected_goals?.home);
+        const actualAwayXg = getNumber(result.actual_statistics?.expected_goals?.away);
+        return predictedHome !== null && predictedAway !== null &&
+          actualHomeXg !== null && actualAwayXg !== null
+          ? [{ predictedHome, predictedAway, actualHomeXg, actualAwayXg }]
+          : [];
+      });
+      const xgAbsoluteError = xgPairs.reduce((sum, row) =>
+        sum + Math.abs(row.predictedHome - row.actualHomeXg) +
+          Math.abs(row.predictedAway - row.actualAwayXg), 0);
+      const xgSquaredError = xgPairs.reduce((sum, row) =>
+        sum + Math.pow(row.predictedHome - row.actualHomeXg, 2) +
+          Math.pow(row.predictedAway - row.actualAwayXg, 2), 0);
+
+      // Validazione temporale prequential: i pronostici sono prodotti per data
+      // usando solo risultati precedenti; i fold sono blocchi cronologici contigui.
+      const chronologicalResults = [...results].sort((a, b) =>
+        new Date(a.match_date) - new Date(b.match_date));
+      const foldCount = Math.min(5, chronologicalResults.length);
+      const walkForwardFolds = [];
+      for (let fold = 0; fold < foldCount; fold++) {
+        const start = Math.floor(fold * chronologicalResults.length / foldCount);
+        const end = Math.floor((fold + 1) * chronologicalResults.length / foldCount);
+        const rows = chronologicalResults.slice(start, end);
+        const foldCorrect = rows.filter(row => row.correct_1x2).length;
+        const foldLogLoss = rows.reduce((sum, row) => {
+          const p = Math.max(EPSILON, Math.min(1,
+            Number(row.probabilities?.[row.actual_result]) / 100));
+          return sum - Math.log(p);
+        }, 0);
+        walkForwardFolds.push({
+          fold: fold + 1,
+          from: rows[0]?.match_date || null,
+          to: rows[rows.length - 1]?.match_date || null,
+          evaluated: rows.length,
+          accuracy_1x2: rows.length ? Number((foldCorrect / rows.length * 100).toFixed(2)) : null,
+          log_loss_1x2: rows.length ? Number((foldLogLoss / rows.length).toFixed(4)) : null
+        });
+      }
+
       const advancedMetrics = {
         "1X2": {
           log_loss: evaluated ? Number((totalLogLoss / evaluated).toFixed(4)) : null,
-          lower_is_better: true
+          lower_is_better: true,
+          per_class: outcomeMetrics
         },
         expected_goals_error: {
           evaluated: expectedGoalsEvaluated,
@@ -2814,6 +2858,17 @@ app.get(
           away_mae: expectedGoalsEvaluated ? Number((awayGoalAbsoluteError / expectedGoalsEvaluated).toFixed(3)) : null,
           home_rmse: expectedGoalsEvaluated ? Number(Math.sqrt(homeGoalSquaredError / expectedGoalsEvaluated).toFixed(3)) : null,
           away_rmse: expectedGoalsEvaluated ? Number(Math.sqrt(awayGoalSquaredError / expectedGoalsEvaluated).toFixed(3)) : null
+        },
+        expected_goals_xg_comparison: {
+          evaluated_matches: xgPairs.length,
+          home_away_mae_combined: xgPairs.length ? Number((xgAbsoluteError / (xgPairs.length * 2)).toFixed(3)) : null,
+          home_away_rmse_combined: xgPairs.length ? Number(Math.sqrt(xgSquaredError / (xgPairs.length * 2)).toFixed(3)) : null,
+          note: "Confronto disponibile solo quando PitchAPI fornisce xG effettivi per entrambe le squadre."
+        },
+        temporal_walk_forward: {
+          method: "5-fold chronological prequential evaluation",
+          folds: walkForwardFolds,
+          note: "Ogni previsione usa lo storico precedente alla data della partita; i fold sono blocchi temporali, non una suddivisione casuale."
         },
         exact_score_top_1: {
           evaluated: exactScoreEvaluated,
@@ -3026,11 +3081,33 @@ app.get(
         "over_3_5", "under_3_5",
         "btts_yes", "btts_no"
       ];
+      // Metriche 1/X/2 separate: accuracy = recall della singola classe.
+      const outcomeMetrics = {};
+      for (const outcome of ["1", "X", "2"]) {
+        const tp = results.filter(result => result.actual_result === outcome && result.predicted_result === outcome).length;
+        const fp = results.filter(result => result.actual_result !== outcome && result.predicted_result === outcome).length;
+        const fn = results.filter(result => result.actual_result === outcome && result.predicted_result !== outcome).length;
+        const tn = evaluated - tp - fp - fn;
+        const support = tp + fn;
+        const predictedCount = tp + fp;
+        const precision = predictedCount ? tp / predictedCount : null;
+        const recall = support ? tp / support : null;
+        const specificity = tn + fp ? tn / (tn + fp) : null;
+        outcomeMetrics[outcome] = {
+          evaluated,
+          correct: tp,
+          support,
+          predicted: predictedCount,
+          accuracy: recall === null ? null : Number((recall * 100).toFixed(2)),
+          precision_percent: precision === null ? null : Number((precision * 100).toFixed(2)),
+          recall_percent: recall === null ? null : Number((recall * 100).toFixed(2)),
+          specificity_percent: specificity === null ? null : Number((specificity * 100).toFixed(2)),
+          true_positive: tp, true_negative: tn, false_positive: fp, false_negative: fn
+        };
+      }
       const accuracyByMarket = Object.fromEntries(
         selectedMarketKeys.map(key => [key,
-          key === "1" || key === "X" || key === "2"
-            ? poissonMetrics["1X2"]
-            : poissonMetrics[key]
+          ["1", "X", "2"].includes(key) ? outcomeMetrics[key] : poissonMetrics[key]
         ])
       );
       const statisticalAccuracyByMarket = {};
