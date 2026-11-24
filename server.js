@@ -4665,64 +4665,48 @@ async function runAutomaticResultsSync() {
   const startedAt = new Date().toISOString();
   const report = {
     started_at: startedAt,
-    leagues_checked: 0,
+    leagues_in_catalog: 0,
+    league_seasons_checked: 0,
     matches_received: 0,
     rows_upserted: 0,
     errors: []
   };
 
   try {
-    const { data: knownRows, error: queryError } = await supabase
-      .from("matches")
-      .select("league_id,season,match_date")
-      .not("league_id", "is", null)
-      .not("season", "is", null)
-      .order("match_date", { ascending: false })
-      .limit(5000);
-
-    if (queryError) throw queryError;
-
-    // Per ogni campionato usa la stagione piu' recente gia' registrata.
+    // Inizializzazione completa: ogni campionato europeo e ogni stagione
+    // dichiarata dal catalogo PitchAPI, non soltanto quelli già in Supabase.
     const europeanLeagues = await getEuropeanLeagueCatalog();
-    const allowedLeagueIds = new Set(europeanLeagues.map(item => String(item.id)));
-    const latestSeasonByLeague = new Map();
-    for (const row of knownRows || []) {
-      const leagueId = String(row.league_id || "");
-      const season = String(row.season || "");
-      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId) || !allowedLeagueIds.has(leagueId)) continue;
-      if (!/^(?:\d{4}\/\d{4}|\d{4})$/.test(season)) continue;
-      if (!latestSeasonByLeague.has(leagueId)) {
-        latestSeasonByLeague.set(leagueId, season);
-      }
+    if (!europeanLeagues.length) {
+      throw new Error("Catalogo europeo vuoto: importazione interrotta per sicurezza.");
     }
+    report.leagues_in_catalog = europeanLeagues.length;
 
-    for (const [leagueId, season] of latestSeasonByLeague.entries()) {
-      report.leagues_checked++;
-      try {
-        let body;
+    for (const league of europeanLeagues) {
+      const leagueId = String(league.id || "");
+      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) continue;
+      const seasons = Array.isArray(league.seasons)
+        ? league.seasons.filter(value => /^(?:\\d{4}\\/\\d{4}|\\d{4})$/.test(String(value)))
+        : [];
+
+      for (const season of seasons) {
+        report.league_seasons_checked++;
         try {
-          body = await sportGet(
-            `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=played`
+          const body = await sportGet(
+            `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=all`
           );
-        } catch (primaryError) {
-          // Alcuni campionati accettano l'anno iniziale (2026) invece della forma 2026/2027.
-          const startYear = String(season).match(/^(\d{4})\/\d{4}$/)?.[1];
-          if (!startYear || !/invalid season year/i.test(primaryError.message || "")) throw primaryError;
-          body = await sportGet(
-            `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(startYear)}&status=played`
-          );
+          const matches = getMatches(body);
+          const saved = await saveMatchesToDatabase(matches, String(season), leagueId);
+          report.matches_received += matches.length;
+          report.rows_upserted += saved;
+        } catch (error) {
+          report.errors.push({
+            league_id: leagueId,
+            league: league.name || null,
+            season: String(season),
+            error: error.message
+          });
+          console.error(`Sync storico fallita per ${leagueId} ${season}:`, error.message);
         }
-        const matches = getMatches(body);
-        const saved = await saveMatchesToDatabase(matches, season, leagueId);
-        report.matches_received += matches.length;
-        report.rows_upserted += saved;
-      } catch (error) {
-        report.errors.push({
-          league_id: leagueId,
-          season,
-          error: error.message
-        });
-        console.error(`Sync risultati fallita per ${leagueId} ${season}:`, error.message);
       }
     }
   } catch (error) {
@@ -4733,13 +4717,13 @@ async function runAutomaticResultsSync() {
     automaticResultsSyncLastRun = report.finished_at;
     automaticResultsSyncLastReport = report;
     automaticResultsSyncRunning = false;
-    console.log("Sync automatica risultati completata:", JSON.stringify(report));
+    console.log("Inizializzazione/sync europea completata:", JSON.stringify(report));
   }
 
   return report;
 }
 
-// Backfill progressivo delle statistiche dettagliate: limita il carico su PitchAPI.
+// Backfill progressivo delle statistiche dettagliate su tutto lo storico disponibile.
 let automaticStatisticsSyncRunning = false;
 let automaticStatisticsSyncLastRun = null;
 let automaticStatisticsSyncLastReport = null;
