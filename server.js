@@ -4685,7 +4685,7 @@ async function runAutomaticResultsSync() {
       const leagueId = String(league.id || "");
       if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) continue;
       const seasons = Array.isArray(league.seasons)
-        ? league.seasons.filter(value => /^(?:\\d{4}\\/\\d{4}|\\d{4})$/.test(String(value)))
+        ? league.seasons.filter(value => /^(?:\d{4}\\/\d{4}|\d{4})$/.test(String(value)))
         : [];
 
       for (const season of seasons) {
@@ -4734,8 +4734,6 @@ async function runAutomaticStatisticsSync() {
   const report = { started_at: new Date().toISOString(), matches_scanned: 0, statistics_saved: 0, already_present: 0, failed: 0, errors: [] };
   try {
     const now = new Date();
-    const twoYearsAgo = new Date(now);
-    twoYearsAgo.setUTCFullYear(twoYearsAgo.getUTCFullYear() - 2);
     const retryBefore = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const currentSeason = now.getUTCMonth() >= 6
       ? `${now.getUTCFullYear()}/${now.getUTCFullYear() + 1}`
@@ -4750,14 +4748,13 @@ async function runAutomaticStatisticsSync() {
       .not("home_goals", "is", null)
       .not("away_goals", "is", null)
       .not("match_date", "is", null)
-      .gte("match_date", twoYearsAgo.toISOString())
       .lte("match_date", now.toISOString())
       .or("statistics_sync_attempted_at.is.null,statistics_sync_attempted_at.lt." + retryBefore)
       .order("match_date", { ascending: false })
       .order("id", { ascending: true });
 
-    // Priorità: Serie A della stagione corrente, altri campionati correnti,
-    // poi stagioni precedenti. Tutte le gare restano nel limite rolling di 2 anni.
+    // Priorità: gare recenti prima, poi lo storico più vecchio. Il backfill
+    // prosegue a blocchi anche sulle stagioni precedenti, fino al 2021.
     const priorityQueries = [
       baseQuery().eq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
       baseQuery().neq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
