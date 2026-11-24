@@ -281,6 +281,24 @@ function getMatches(body) {
   return [];
 }
 
+const EUROPEAN_COUNTRY_CODES = new Set(["ALB","AND","ARM","AUT","AZE","BEL","BIH","BLR","BUL","CRO","CYP","CZE","DEN","ENG","ESP","EST","FIN","FRA","FRO","GEO","GER","GRE","HUN","IRL","ISL","ISR","ITA","KAZ","KVX","KOS","LIE","LTU","LUX","LVA","MDA","MKD","MLT","MNE","NED","NIR","NOR","POL","POR","ROU","RUS","SCO","SMR","SRB","SVK","SVN","SWE","SUI","TUR","UKR","WAL","GBR","GB","NL","RO","IT","DE","FR","ES","PT","BE","AT","CH","GR","HR","RS","UA","SE","NO","DK","FI","PL","CZ","SK","SI","HU","BG","IE","IS","CY","TR","LU","MT","EE","LV","LT","BA","ME","AL","MK","MD","AD","LI","FO","AM","AZ","GE","BY","XK"]);
+const EUROPEAN_COUNTRY_NAMES = new Set(["albania","andorra","armenia","austria","azerbaijan","belarus","belgium","bosnia and herzegovina","bulgaria","croatia","cyprus","czech republic","czechia","denmark","england","estonia","faroe islands","finland","france","georgia","germany","greece","hungary","iceland","ireland","israel","italy","kazakhstan","kosovo","latvia","liechtenstein","lithuania","luxembourg","malta","moldova","monaco","montenegro","netherlands","north macedonia","northern ireland","norway","poland","portugal","romania","russia","san marino","scotland","serbia","slovakia","slovenia","spain","sweden","switzerland","turkey","ukraine","wales","united kingdom"]);
+function isEuropeanLeague(league) {
+ const name=String(league?.name||league?.league_name||"").toLowerCase();
+ const code=String(league?.country_code||league?.country?.code||"").trim().toUpperCase();
+ const country=String(league?.country_name||league?.country?.name||league?.country||"").trim().toLowerCase();
+ const international=/champions league|uefa champions|europa league|conference league|uefa conference|world cup|fifa world cup|european championship|uefa euro/i.test(name);
+ return international||EUROPEAN_COUNTRY_CODES.has(code)||EUROPEAN_COUNTRY_NAMES.has(country);
+}
+async function getEuropeanLeagueCatalog() {
+ const body=await sportGet("/leagues");
+ const leagues=Array.isArray(body?.data?.leagues)?body.data.leagues:Array.isArray(body?.leagues)?body.leagues:Array.isArray(body?.data)?body.data:getMatches(body);
+ return leagues.filter(isEuropeanLeague);
+}
+function getMatchLeagueId(match) {
+ return String(match?.league_id??match?.league?.id??match?.competition?.id??"");
+}
+
 function getHomeName(match) {
   return typeof match.home_team === "string"
     ? match.home_team
@@ -1436,26 +1454,7 @@ app.get("/api/status", async (req, res) => {
 
   if (PITCHAPI_KEY) {
     try {
-      const body = await sportGet("/leagues");
-
-      leagues = Array.isArray(body?.data?.leagues)
-        ? body.data.leagues
-        : getMatches(body);
-
-      if (
-        !leagues.length &&
-        Array.isArray(body?.data)
-      ) {
-        leagues = body.data;
-      }
-
-      if (
-        !leagues.length &&
-        Array.isArray(body?.leagues)
-      ) {
-        leagues = body.leagues;
-      }
-
+      leagues = await getEuropeanLeagueCatalog();
       providerConnected = true;
     } catch (error) {
       console.error(
@@ -1533,12 +1532,8 @@ app.get(
   requireSportApi,
   async (req, res) => {
     try {
-      const body = await sportGet("/leagues");
-
-      res.json({
-        ok: true,
-        response: body
-      });
+      const leagues = await getEuropeanLeagueCatalog();
+      res.json({ ok: true, response: { data: { leagues } }, league_count: leagues.length });
     } catch (error) {
       handleError(res, error);
     }
@@ -1573,7 +1568,9 @@ const body = await sportGet(
   `/date/${encodeURIComponent(date)}?status=${encodeURIComponent(status)}`
 );
 
-      const matches = getMatches(body);
+      const europeanLeagues = await getEuropeanLeagueCatalog();
+      const europeanIds = new Set(europeanLeagues.map(item => String(item.id)));
+      const matches = getMatches(body).filter(match => europeanIds.has(getMatchLeagueId(match)));
 
       let savedMatches = 0;
       let saveError = null;
@@ -1757,12 +1754,9 @@ app.post(
     }
 
     try {
-      const catalogue = await sportGet("/leagues");
-      const leagues = catalogue?.data?.leagues || catalogue?.leagues || [];
+      const leagues = await getEuropeanLeagueCatalog();
       const league = leagues.find(item => String(item.id) === leagueId);
-      if (!league) {
-        return res.status(404).json({ ok: false, error: "Campionato non trovato nel catalogo PitchAPI." });
-      }
+      if (!league) return res.status(404).json({ ok: false, error: "Campionato non europeo o non presente nel catalogo consentito." });
 
       const availableSeasons = Array.isArray(league.seasons) ? league.seasons : [];
       const requested = String(req.query.seasons || "").trim();
@@ -4635,11 +4629,13 @@ async function runAutomaticResultsSync() {
     if (queryError) throw queryError;
 
     // Per ogni campionato usa la stagione piu' recente gia' registrata.
+    const europeanLeagues = await getEuropeanLeagueCatalog();
+    const allowedLeagueIds = new Set(europeanLeagues.map(item => String(item.id)));
     const latestSeasonByLeague = new Map();
     for (const row of knownRows || []) {
       const leagueId = String(row.league_id || "");
       const season = String(row.season || "");
-      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) continue;
+      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId) || !allowedLeagueIds.has(leagueId)) continue;
       if (!/^(?:\d{4}\/\d{4}|\d{4})$/.test(season)) continue;
       if (!latestSeasonByLeague.has(leagueId)) {
         latestSeasonByLeague.set(leagueId, season);
@@ -4706,9 +4702,13 @@ async function runAutomaticStatisticsSync() {
     const currentSeason = now.getUTCMonth() >= 6
       ? `${now.getUTCFullYear()}/${now.getUTCFullYear() + 1}`
       : `${now.getUTCFullYear() - 1}/${now.getUTCFullYear()}`;
+    const europeanLeagues = await getEuropeanLeagueCatalog();
+    const europeanIds = europeanLeagues.map(item => String(item.id));
+    if (!europeanIds.length) throw new Error("Catalogo europeo PitchAPI vuoto: sincronizzazione interrotta per sicurezza.");
     const baseQuery = () => supabase
       .from("matches")
       .select("id,league_id,season,match_date")
+      .in("league_id", europeanIds)
       .not("home_goals", "is", null)
       .not("away_goals", "is", null)
       .not("match_date", "is", null)
