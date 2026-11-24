@@ -335,6 +335,25 @@ async function getLeagueCatalog() {
    : Array.isArray(body?.data) ? body.data
    : getMatches(body);
 }
+
+// Cache dei nomi ufficiali: le risposte fixture possono omettere league_name.
+let leagueNameMapCache = null;
+let leagueNameMapCacheAt = 0;
+async function getLeagueNameMap() {
+ const now = Date.now();
+ if (leagueNameMapCache && now - leagueNameMapCacheAt < 6 * 60 * 60 * 1000) {
+   return leagueNameMapCache;
+ }
+ const catalog = await getLeagueCatalog();
+ const nextMap = new Map(catalog
+   .filter(item => item?.id && item?.name)
+   .map(item => [String(item.id), String(item.name).trim()]));
+ if (nextMap.size) {
+   leagueNameMapCache = nextMap;
+   leagueNameMapCacheAt = now;
+ }
+ return leagueNameMapCache || nextMap;
+}
 async function getEuropeanLeagueCatalog() {
  return (await getLeagueCatalog()).filter(isEuropeanLeague);
 }
@@ -580,6 +599,17 @@ async function saveMatchesToDatabase(
 
   if (!rows.length) {
     return 0;
+  }
+
+  // Arricchisce il nome dal catalogo PitchAPI prima dell'upsert.
+  // Se il catalogo non conosce l'ID, league_name resta undefined e viene
+  // omesso dal payload: mai cancellare un nome già presente con null.
+  const namesById = await getLeagueNameMap();
+  for (const row of rows) {
+    if (!row.league_name) {
+      const catalogName = namesById.get(String(row.league_id));
+      if (catalogName) row.league_name = catalogName;
+    }
   }
 
   const { error } = await supabase
