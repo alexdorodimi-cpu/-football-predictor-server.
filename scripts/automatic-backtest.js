@@ -15,8 +15,12 @@ async function main() {
   const url = new URL(`${baseUrl}/api/backtest/${encodeURIComponent(leagueId)}`);
   if (season) url.searchParams.set("season", season);
   url.searchParams.set("limit", String(limit));
+  // Usa la stessa modalità paginata che ha prodotto il backtest statistico
+  // verificato: la modalità standard seleziona solo le partite più recenti,
+  // che in questo dataset possono non avere uno storico sufficiente per il modello.
   url.searchParams.set("include_stats", "true");
-  url.searchParams.set("stats_limit", "10");
+  url.searchParams.set("stats_limit", String(limit));
+  url.searchParams.set("offset", "0");
 
   const headers = { Accept: "application/json" };
   if (process.env.PREDICTOR_ACCESS_TOKEN) {
@@ -32,6 +36,12 @@ async function main() {
   const data = JSON.parse(body);
   if (!data.ok || !data.accuracy_by_market) {
     throw new Error("Risposta backtest incompleta: " + body.slice(0, 1200));
+  }
+
+  const selected = Number(data.evaluation_matches_selected || 0);
+  const evaluated = Number(data.evaluated_matches || 0);
+  if (!Array.isArray(data.results) || data.results.length === 0 || evaluated === 0) {
+    throw new Error(`Backtest senza campione valutabile: storico=${data.available_history_matches ?? "n/d"}, selezionate=${selected}, valutate=${evaluated}, offset=${data.offset ?? "n/d"}.`);
   }
 
   const source = data.accuracy_by_market;
@@ -183,6 +193,8 @@ async function main() {
     season: season || data.season || "Tutte le stagioni disponibili",
     model: data.model || null,
     requested_matches: data.requested_matches ?? limit,
+    available_history_matches: data.available_history_matches ?? null,
+    evaluation_matches_selected: data.evaluation_matches_selected ?? null,
     evaluated_matches: data.evaluated_matches ?? null,
     skipped_matches: data.evaluation_matches_selected != null && data.evaluated_matches != null
       ? data.evaluation_matches_selected - data.evaluated_matches
