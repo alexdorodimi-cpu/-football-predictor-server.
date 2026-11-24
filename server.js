@@ -3748,7 +3748,6 @@ app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async
     }
     // Riprende da cursor e contatori persistiti. Se nessun checkpoint esiste,
     // parte dall'inizio; le righe già corrette vengono riconosciute come invariate.
-    leagueNameRepairJob.running = true;
     runLeagueNameRepair();
     return res.status(202).json({
       ok: true,
