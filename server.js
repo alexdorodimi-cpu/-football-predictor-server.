@@ -3762,6 +3762,111 @@ app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async
   }
 });
 
+// Audit completo e in sola lettura dei nomi campionato in Supabase.
+app.get("/api/data/integrity", requireSportApi, requireDatabase, async (req, res) => {
+  try {
+    const catalog = await getLeagueCatalog();
+    const namesById = new Map(catalog.filter(item => item?.id && item?.name)
+      .map(item => [String(item.id), String(item.name).trim()]));
+    const { count: totalRows, error: countError } = await supabase
+      .from("matches").select("id", { count: "exact", head: true });
+    if (countError) throw countError;
+
+    const audit = {
+      scanned: 0,
+      correct_names: 0,
+      missing_names: 0,
+      conflicting_names: 0,
+      unmapped_league_ids: 0,
+      null_league_ids: 0,
+      by_league: new Map(),
+      issues_sample: []
+    };
+    const pageSize = 1000;
+    for (let offset = 0; offset < (totalRows || 0); offset += pageSize) {
+      const { data, error } = await supabase.from("matches")
+        .select("id,league_id,league_name")
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw error;
+      const page = data || [];
+      if (!page.length) break;
+      for (const row of page) {
+        audit.scanned++;
+        const leagueId = String(row.league_id || "").trim();
+        const expectedName = namesById.get(leagueId);
+        const currentName = String(row.league_name || "").trim();
+        const key = leagueId || "__NULL__";
+        if (!audit.by_league.has(key)) {
+          audit.by_league.set(key, {
+            league_id: leagueId || null,
+            expected_name: expectedName || null,
+            rows: 0,
+            correct_names: 0,
+            missing_names: 0,
+            conflicting_names: 0
+          });
+        }
+        const group = audit.by_league.get(key);
+        group.rows++;
+        if (!leagueId) {
+          audit.null_league_ids++;
+          audit.unmapped_league_ids++;
+          if (audit.issues_sample.length < 20) audit.issues_sample.push({
+            match_id: row.id, issue: "null_league_id", league_name: row.league_name
+          });
+        } else if (!expectedName) {
+          audit.unmapped_league_ids++;
+          if (audit.issues_sample.length < 20) audit.issues_sample.push({
+            match_id: row.id, issue: "unmapped_league_id", league_id: leagueId,
+            league_name: row.league_name
+          });
+        } else if (currentName === expectedName) {
+          audit.correct_names++;
+          group.correct_names++;
+        } else if (!currentName) {
+          audit.missing_names++;
+          group.missing_names++;
+          if (audit.issues_sample.length < 20) audit.issues_sample.push({
+            match_id: row.id, issue: "missing_league_name", league_id: leagueId,
+            expected_name: expectedName
+          });
+        } else {
+          audit.conflicting_names++;
+          group.conflicting_names++;
+          if (audit.issues_sample.length < 20) audit.issues_sample.push({
+            match_id: row.id, issue: "conflicting_league_name", league_id: leagueId,
+            expected_name: expectedName, actual_name: row.league_name
+          });
+        }
+      }
+    }
+
+    const byLeague = [...audit.by_league.values()]
+      .sort((a, b) => b.rows - a.rows || String(a.league_id).localeCompare(String(b.league_id)));
+    const issues = audit.missing_names + audit.conflicting_names +
+      audit.unmapped_league_ids;
+    res.json({
+      ok: issues === 0 && audit.scanned === (totalRows || 0),
+      audit: "read_only_league_name_integrity",
+      generated_at: new Date().toISOString(),
+      catalog_leagues: namesById.size,
+      database_rows: totalRows || 0,
+      scanned: audit.scanned,
+      correct_names: audit.correct_names,
+      missing_names: audit.missing_names,
+      conflicting_names: audit.conflicting_names,
+      unmapped_league_ids: audit.unmapped_league_ids,
+      null_league_ids: audit.null_league_ids,
+      by_league: byLeague,
+      issues_sample: audit.issues_sample,
+      note: "Controllo in sola lettura; nessun dato è stato modificato."
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
 // Report giornaliero CSV delle previsioni. Senza quote affidabili non
 // calcola value/ROI e segnala esplicitamente "nessuna giocata".
 app.get("/api/reports/daily.csv", requireSportApi, requireDatabase, async (req, res) => {
