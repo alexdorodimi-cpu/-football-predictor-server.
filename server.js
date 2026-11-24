@@ -1028,6 +1028,7 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
       })
     : { applied: false, training_matches: 0, reason: "Random Forest disattivato: impostare ENABLE_RANDOM_FOREST=true dopo il test controllato." };
   const RANDOM_FOREST_BLEND_WEIGHT = randomForestForecast.applied ? 0.20 : 0;
+  const lambdasAfterCoach = { home: homeLambda, away: awayLambda };
   const lambdasBeforeRandomForest = { home: homeLambda, away: awayLambda };
   if (randomForestForecast.applied) {
     homeLambda = Math.max(0.10, Math.min(4.5,
@@ -1040,12 +1041,14 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
     ));
   }
 
+  const lambdasBeforeLineup = { home: homeLambda, away: awayLambda };
   if (lineupImpact?.applied) {
     homeLambda *= lineupImpact.home_attack_factor / lineupImpact.away_defence_factor;
     awayLambda *= lineupImpact.away_attack_factor / lineupImpact.home_defence_factor;
     homeLambda = Math.max(0.10, Math.min(4.5, homeLambda));
     awayLambda = Math.max(0.10, Math.min(4.5, awayLambda));
   }
+  const finalLambdas = { home: homeLambda, away: awayLambda };
 
   // Matrice delle probabilità Poisson.
   const matrix = buildGoalModel(homeLambda, awayLambda);
@@ -1195,6 +1198,38 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
         venue_away: Number(venueAwayLambda.toFixed(3)),
         overall_weight: 0.3,
         venue_weight: 0.7
+      },
+      lambda_diagnostics: {
+        before_xg: {
+          home: Number(preXgLambdas.home.toFixed(4)),
+          away: Number(preXgLambdas.away.toFixed(4))
+        },
+        after_xg_before_coach: {
+          home: Number(lambdasBeforeCoach.home.toFixed(4)),
+          away: Number(lambdasBeforeCoach.away.toFixed(4))
+        },
+        coach_adjustment_percent: {
+          home: Number((homeCoachAdjustment * 100).toFixed(3)),
+          away: Number((awayCoachAdjustment * 100).toFixed(3))
+        },
+        after_coach: {
+          home: Number(lambdasAfterCoach.home.toFixed(4)),
+          away: Number(lambdasAfterCoach.away.toFixed(4))
+        },
+        after_random_forest: {
+          home: Number(lambdasBeforeLineup.home.toFixed(4)),
+          away: Number(lambdasBeforeLineup.away.toFixed(4))
+        },
+        before_lineup: {
+          home: Number(lambdasBeforeLineup.home.toFixed(4)),
+          away: Number(lambdasBeforeLineup.away.toFixed(4))
+        },
+        final_used_for_poisson: {
+          home: Number(finalLambdas.home.toFixed(4)),
+          away: Number(finalLambdas.away.toFixed(4))
+        },
+        lineup_applied: Boolean(lineupImpact?.applied),
+        random_forest_applied: Boolean(randomForestForecast.applied)
       },
       venue_split_used: homeVenueReady && awayVenueReady,
       random_forest: {
