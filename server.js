@@ -537,23 +537,37 @@ async function getLeagueMatchesFromDatabase(
     throw new Error("Supabase non configurato.");
   }
 
-  // Usa lo storico di TUTTE le stagioni disponibili del campionato.
-  // calculatePrediction filtra poi ogni campione in base alla data della
-  // partita da prevedere: nessun risultato successivo può contaminare il modello.
-  // Il parametro season resta accettato per compatibilità con le chiamate esistenti,
-  // ma non restringe più lo storico di apprendimento.
-  const { data, error } = await supabase
-    .from("matches")
-    .select("*")
-    .eq("league_id", String(leagueId))
-    .order("match_date", { ascending: true })
-    .limit(5000);
+  // Recupera tutto lo storico a pagine: Supabase può applicare un limite
+  // massimo di 1000 righe per risposta anche quando .limit() è superiore.
+  // Il modello filtra poi i campioni in base alla data della partita target,
+  // evitando l'utilizzo di risultati futuri.
+  const pageSize = 1000;
+  const allMatches = [];
+  let offset = 0;
 
-  if (error) {
-    throw error;
+  while (true) {
+    const { data, error } = await supabase
+      .from("matches")
+      .select("*")
+      .eq("league_id", String(leagueId))
+      .order("match_date", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    const page = data || [];
+    allMatches.push(...page);
+
+    if (page.length < pageSize) {
+      break;
+    }
+
+    offset += pageSize;
   }
 
-  return data || [];
+  return allMatches;
 }
 
 // ==========================================
