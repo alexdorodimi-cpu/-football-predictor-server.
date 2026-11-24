@@ -1200,31 +1200,35 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
         venue_weight: 0.7
       },
       lambda_diagnostics: {
-        before_xg: {
+        lambda_from_poisson_before_xg_blend: {
           home: Number(preXgLambdas.home.toFixed(4)),
           away: Number(preXgLambdas.away.toFixed(4))
         },
-        after_xg_before_coach: {
+        lambda_after_xg_blend_before_coach: {
           home: Number(lambdasBeforeCoach.home.toFixed(4)),
           away: Number(lambdasBeforeCoach.away.toFixed(4))
+        },
+        xg_blend: {
+          applied: Boolean(xgReady),
+          weight_percent: xgReady ? XG_BLEND_WEIGHT * 100 : 0,
+          historical_xg: xgReady ? {
+            home: Number(Number(xgAverages.home).toFixed(4)),
+            away: Number(Number(xgAverages.away).toFixed(4))
+          } : null
         },
         coach_adjustment_percent: {
           home: Number((homeCoachAdjustment * 100).toFixed(3)),
           away: Number((awayCoachAdjustment * 100).toFixed(3))
         },
-        after_coach: {
+        lambda_after_coach: {
           home: Number(lambdasAfterCoach.home.toFixed(4)),
           away: Number(lambdasAfterCoach.away.toFixed(4))
         },
-        after_random_forest: {
+        lambda_after_random_forest_before_lineup: {
           home: Number(lambdasBeforeLineup.home.toFixed(4)),
           away: Number(lambdasBeforeLineup.away.toFixed(4))
         },
-        before_lineup: {
-          home: Number(lambdasBeforeLineup.home.toFixed(4)),
-          away: Number(lambdasBeforeLineup.away.toFixed(4))
-        },
-        final_used_for_poisson: {
+        lambda_final_used_for_poisson: {
           home: Number(finalLambdas.home.toFixed(4)),
           away: Number(finalLambdas.away.toFixed(4))
         },
@@ -1251,7 +1255,7 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
           home: Number(xgCounts?.home || 0),
           away: Number(xgCounts?.away || 0)
         },
-        lambdas_before: {
+        lambdas_before_xg_blend: {
           home: Number(preXgLambdas.home.toFixed(3)),
           away: Number(preXgLambdas.away.toFixed(3))
         },
