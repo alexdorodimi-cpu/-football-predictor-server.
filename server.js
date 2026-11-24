@@ -3785,6 +3785,12 @@ app.get("/api/sync/automatic/status", (req, res) => {
     interval_hours: 12,
     last_run: automaticResultsSyncLastRun,
     last_report: automaticResultsSyncLastReport,
+    statistics_sync: {
+      enabled: Boolean(supabase && PITCHAPI_KEY),
+      running: automaticStatisticsSyncRunning,
+      last_run: automaticStatisticsSyncLastRun,
+      last_report: automaticStatisticsSyncLastReport
+    },
     note: "Sincronizza i risultati conclusi delle stagioni piu' recenti dei campionati gia' presenti in Supabase. Su hosting con sospensione del processo, il job riparte quando il servizio viene riattivato."
   });
 });
@@ -3896,6 +3902,72 @@ async function runAutomaticResultsSync() {
   return report;
 }
 
+// Backfill progressivo delle statistiche dettagliate: limita il carico su PitchAPI.
+let automaticStatisticsSyncRunning = false;
+let automaticStatisticsSyncLastRun = null;
+let automaticStatisticsSyncLastReport = null;
+let automaticStatisticsSyncOffset = 0;
+
+async function runAutomaticStatisticsSync() {
+  if (!supabase || !PITCHAPI_KEY || automaticStatisticsSyncRunning) return;
+  automaticStatisticsSyncRunning = true;
+  const report = { started_at: new Date().toISOString(), matches_scanned: 0, statistics_saved: 0, failed: 0, errors: [] };
+  try {
+    const { data: matches, error: matchesError } = await supabase
+      .from("matches")
+      .select("id,league_id,match_date,home_goals,away_goals")
+      .not("home_goals", "is", null)
+      .not("away_goals", "is", null)
+      .not("match_date", "is", null)
+      .lte("match_date", new Date().toISOString())
+      .order("match_date", { ascending: false })
+      .range(automaticStatisticsSyncOffset, automaticStatisticsSyncOffset + 999);
+    if (matchesError) throw matchesError;
+    const scanned = matches || [];
+    report.matches_scanned = scanned.length;
+    if (!scanned.length) {
+      automaticStatisticsSyncOffset = 0;
+    } else {
+      const ids = scanned.map(match => String(match.id));
+      const { data: existing, error: existingError } = await supabase
+        .from("match_statistics").select("match_id").in("match_id", ids);
+      if (existingError) throw existingError;
+      const existingIds = new Set((existing || []).map(row => String(row.match_id)));
+      const missing = scanned.filter(match => !existingIds.has(String(match.id))).slice(0, 100);
+      const fetched = await mapWithConcurrency(missing, 5, async match => {
+        try {
+          const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
+          return { match_id: String(match.id), league_id: String(match.league_id), match_date: match.match_date,
+            normalized_stats: getNormalizedMatchStats(body), updated_at: new Date().toISOString() };
+        } catch (error) {
+          return { match_id: String(match.id), error: error.message };
+        }
+      });
+      const successful = fetched.filter(row => row && row.normalized_stats);
+      if (successful.length) {
+        const { error } = await supabase.from("match_statistics").upsert(successful, { onConflict: "match_id" });
+        if (error) throw error;
+      }
+      report.statistics_saved = successful.length;
+      const failures = fetched.filter(row => row?.error);
+      report.failed = failures.length;
+      report.errors = failures.slice(0, 10).map(row => ({ match_id: row.match_id, error: row.error }));
+      // Avanza nel dataset; al termine riparte dall'inizio per intercettare nuove partite.
+      automaticStatisticsSyncOffset += 1000;
+      if (scanned.length < 1000) automaticStatisticsSyncOffset = 0;
+    }
+  } catch (error) {
+    report.errors.push({ error: error.message });
+  } finally {
+    report.finished_at = new Date().toISOString();
+    automaticStatisticsSyncLastRun = report.finished_at;
+    automaticStatisticsSyncLastReport = report;
+    automaticStatisticsSyncRunning = false;
+    console.log("Backfill statistiche automatico completato:", JSON.stringify(report));
+  }
+  return report;
+}
+
 // Render puo' sospendere i servizi gratuiti inattivi: il job parte all'avvio
 // e poi ogni 12 ore mentre il processo rimane attivo.
 const AUTOMATIC_RESULTS_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
@@ -3905,11 +3977,15 @@ app.listen(PORT, () => {
   setTimeout(() => {
     runAutomaticResultsSync().catch(error =>
       console.error("Avvio sync automatica non riuscito:", error.message)
-    );
+    ).finally(() => runAutomaticStatisticsSync().catch(error =>
+      console.error("Avvio backfill statistiche non riuscito:", error.message)
+    ));
   }, 60 * 1000);
   setInterval(() => {
     runAutomaticResultsSync().catch(error =>
       console.error("Sync periodica non riuscita:", error.message)
-    );
+    ).finally(() => runAutomaticStatisticsSync().catch(error =>
+      console.error("Backfill statistiche periodico non riuscito:", error.message)
+    ));
   }, AUTOMATIC_RESULTS_SYNC_INTERVAL_MS);
 });
