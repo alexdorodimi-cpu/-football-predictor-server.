@@ -3686,39 +3686,140 @@ function getNormalizedMatchStats(body) {
 // ==========================================
 
 
-app.post("/api/data-sources/open-matchday/serie-a/sync", requireDatabase, async (req,res)=>{
- try{
-  const leagueId="l_0ALvwF", season=String(req.query.season||"2026/2027");
-  if(season!=="2026/2027")return res.status(400).json({ok:false,error:"Supportata solo Serie A 2026/2027."});
-  const url="https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data/ITA_1_serie-a/results_2627.csv";
-  const response=await fetch(url,{headers:{Accept:"text/csv"},signal:AbortSignal.timeout(30000)});
-  if(!response.ok)throw Object.assign(new Error("Open-Matchday HTTP "+response.status),{status:502});
-  const rows=parseCsvRows(await response.text());
-  const required=["date","home","away","ft_home","ft_away","home_shots","away_shots","home_target","away_target","home_fouls","away_fouls","home_corners","away_corners","home_yellow","away_yellow","home_red","away_red"];
-  if(!rows.length||required.some(k=>!(k in rows[0])))throw Object.assign(new Error("Schema CSV Open-Matchday non riconosciuto."),{status:502});
-  const {data:matches,error:matchError}=await supabase.from("matches").select("id,league_id,season,home_team,away_team,match_date,home_goals,away_goals").eq("league_id",leagueId).eq("season",season);
-  if(matchError)throw matchError;
-  const index=new Map();
-  for(const m of matches||[]){const key=[String(m.match_date||"").slice(0,10),normalizeExternalTeamName(m.home_team),normalizeExternalTeamName(m.away_team)].join("|");if(!index.has(key))index.set(key,[]);index.get(key).push(m);}
-  const candidates=[];let unmatched=0,scoreConflicts=0,ambiguous=0;
-  for(const x of rows){const date=String(x.date||"").slice(0,10);if(!validDate(date))continue;const found=index.get([date,normalizeExternalTeamName(x.home),normalizeExternalTeamName(x.away)].join("|"))||[];
-   if(found.length!==1){if(found.length>1)ambiguous++;else unmatched++;continue;}
-   const m=found[0],hg=getNumber(x.ft_home),ag=getNumber(x.ft_away);
-   if(hg===null||ag===null||getNumber(m.home_goals)!==hg||getNumber(m.away_goals)!==ag){scoreConflicts++;continue;}
-   candidates.push({match:m,external:x});
-  }
-  const ids=candidates.map(x=>String(x.match.id)),existing=new Map();
-  for(let o=0;o<ids.length;o+=200){const {data,error}=await supabase.from("match_statistics").select("match_id,normalized_stats").in("match_id",ids.slice(o,o+200));if(error)throw error;for(const r of data||[])existing.set(String(r.match_id),r.normalized_stats||{});}
-  const columns=[["total_shots","home_shots","away_shots"],["shots_on_target","home_target","away_target"],["fouls","home_fouls","away_fouls"],["corners","home_corners","away_corners"],["yellow_cards","home_yellow","away_yellow"],["red_cards","home_red","away_red"]];
-  const upserts=[];let importedMatches=0,fieldsImported=0,preserved=0;
-  for(const {match,external} of candidates){const merged={...(existing.get(String(match.id))||{})};let added=0;
-   for(const [field,hc,ac] of columns){const home=getNumber(external[hc]),away=getNumber(external[ac]);if(home===null&&away===null)continue;const prev=merged[field];if(prev&&(getNumber(prev.home)!==null||getNumber(prev.away)!==null)){preserved++;continue;}
-    merged[field]={home,away,source_key:"open-matchday:"+hc+"/"+ac,source:"open-matchday"};added++;}
-   if(added){upserts.push({match_id:String(match.id),league_id:leagueId,match_date:match.match_date,normalized_stats:merged,updated_at:new Date().toISOString()});importedMatches++;fieldsImported+=added;}
-  }
-  for(let o=0;o<upserts.length;o+=100){const {error}=await supabase.from("match_statistics").upsert(upserts.slice(o,o+100),{onConflict:"match_id"});if(error)throw error;}
-  res.json({ok:true,source:"open-matchday",usage:"private_non_commercial_only",league_id:leagueId,season,csv_rows:rows.length,strict_matches_matched:candidates.length,matches_with_new_statistics:importedMatches,statistic_fields_imported:fieldsImported,existing_values_preserved:preserved,unmatched_rows:unmatched,score_conflicts:scoreConflicts,ambiguous_matches:ambiguous,note:"Match abbinate solo con data, squadre e risultato identici; i valori già presenti non vengono sovrascritti."});
- }catch(error){handleError(res,error);}
+// Importatore Open-Matchday: associa esclusivamente partite già presenti in PitchAPI
+// tramite campionato, data, squadre e risultato; non crea ID sintetici.
+app.post("/api/data-sources/open-matchday/sync", requireDatabase, async (req, res) => {
+  try {
+    const leagueId = String(req.query.league_id || "").trim();
+    const folder = String(req.query.folder || "").trim();
+    const season = String(req.query.season || "2026/2027");
+    if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
+      return res.status(400).json({ ok: false, error: "league_id PitchAPI non valido." });
+    }
+    if (!/^[A-Z]{3}_[A-Z0-9]+_[a-z0-9-]+$/.test(folder)) {
+      return res.status(400).json({ ok: false, error: "folder non valido. Usa il nome esatto di una cartella in LEAGUE_INDEX.md." });
+    }
+    if (season !== "2026/2027") {
+      return res.status(400).json({ ok: false, error: "Open-Matchday pubblica in questo importer solo la stagione 2026/2027." });
+    }
+    const countryCode = folder.split("_")[0];
+    const europeanFolderCodes = new Set(["ALB","AND","ARM","AUT","AZE","BEL","BIH","BLR","BUL","CRO","CYP","CZE","DEN","ENG","ESP","EST","FIN","FRA","FRO","GEO","GER","GRE","HUN","IRL","ISL","ISR","ITA","KAZ","KOS","LIE","LTU","LUX","LVA","MDA","MKD","MLT","MNE","NED","NIR","NOR","POL","POR","ROU","RUS","SCO","SMR","SRB","SVK","SVN","SWE","SUI","TUR","UKR","WAL","UEFA"]);
+    if (!europeanFolderCodes.has(countryCode)) {
+      return res.status(400).json({ ok: false, error: "Questo importer accetta solo competizioni europee." });
+    }
+
+    const [indexResponse, catalog] = await Promise.all([
+      fetch("https://raw.githubusercontent.com/oladeeayo/open-matchday/master/LEAGUE_INDEX.md", {
+        headers: { Accept: "text/markdown" }, signal: AbortSignal.timeout(20000)
+      }),
+      getEuropeanLeagueCatalog()
+    ]);
+    if (!indexResponse.ok) throw Object.assign(new Error("Indice Open-Matchday non raggiungibile."), { status: 502 });
+    const indexText = await indexResponse.text();
+    const indexRow = indexText.split(/\r?\n/).find(line => line.startsWith("| `" + folder + "` |"));
+    if (!indexRow) return res.status(404).json({ ok: false, error: "Cartella non presente nell'indice Open-Matchday." });
+
+    const cells = indexRow.split("|").map(value => value.trim());
+    const externalLeagueName = (cells[2] || "").replace(/\`/g, "");
+    const pitchLeague = catalog.find(item => String(item.id) === leagueId);
+    if (!pitchLeague) return res.status(404).json({ ok: false, error: "Campionato non trovato nel catalogo europeo PitchAPI." });
+    const pitchLeagueName = String(pitchLeague.name || pitchLeague.league_name || "");
+    if (!pitchLeagueName || normalizeExternalTeamName(pitchLeagueName) !== normalizeExternalTeamName(externalLeagueName)) {
+      return res.status(409).json({
+        ok: false, error: "Il nome del campionato non coincide: importazione bloccata per evitare associazioni errate.",
+        pitchapi_league: pitchLeagueName, open_matchday_league: externalLeagueName
+      });
+    }
+
+    const csvUrl = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data/" +
+      folder + "/results_2627.csv";
+    const csvResponse = await fetch(csvUrl, {
+      headers: { Accept: "text/csv" }, signal: AbortSignal.timeout(30000)
+    });
+    if (!csvResponse.ok) throw Object.assign(new Error("CSV Open-Matchday non disponibile (HTTP " + csvResponse.status + ")."), { status: 502 });
+    const rows = parseCsvRows(await csvResponse.text());
+    const required = ["date","home","away","ft_home","ft_away","home_shots","away_shots","home_target","away_target","home_fouls","away_fouls","home_corners","away_corners","home_yellow","away_yellow","home_red","away_red"];
+    if (!rows.length || required.some(key => !(key in rows[0]))) {
+      throw Object.assign(new Error("Schema CSV Open-Matchday non riconosciuto."), { status: 502 });
+    }
+
+    const { data: matches, error: matchError } = await supabase.from("matches")
+      .select("id,league_id,season,home_team,away_team,match_date,home_goals,away_goals")
+      .eq("league_id", leagueId).eq("season", season);
+    if (matchError) throw matchError;
+    const index = new Map();
+    for (const match of matches || []) {
+      const key = [String(match.match_date || "").slice(0, 10),
+        normalizeExternalTeamName(match.home_team), normalizeExternalTeamName(match.away_team)].join("|");
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(match);
+    }
+
+    const candidates = [];
+    let unmatched = 0, scoreConflicts = 0, ambiguous = 0;
+    for (const external of rows) {
+      const date = String(external.date || "").slice(0, 10);
+      if (!validDate(date)) { unmatched++; continue; }
+      const found = index.get([date, normalizeExternalTeamName(external.home),
+        normalizeExternalTeamName(external.away)].join("|")) || [];
+      if (found.length !== 1) { if (found.length > 1) ambiguous++; else unmatched++; continue; }
+      const match = found[0], homeGoals = getNumber(external.ft_home), awayGoals = getNumber(external.ft_away);
+      if (homeGoals === null || awayGoals === null ||
+          getNumber(match.home_goals) !== homeGoals || getNumber(match.away_goals) !== awayGoals) {
+        scoreConflicts++; continue;
+      }
+      candidates.push({ match, external });
+    }
+
+    const ids = candidates.map(item => String(item.match.id));
+    const existing = new Map();
+    for (let offset = 0; offset < ids.length; offset += 200) {
+      const { data, error } = await supabase.from("match_statistics")
+        .select("match_id,normalized_stats").in("match_id", ids.slice(offset, offset + 200));
+      if (error) throw error;
+      for (const row of data || []) existing.set(String(row.match_id), row.normalized_stats || {});
+    }
+    const columns = [
+      ["total_shots","home_shots","away_shots"], ["shots_on_target","home_target","away_target"],
+      ["fouls","home_fouls","away_fouls"], ["corners","home_corners","away_corners"],
+      ["yellow_cards","home_yellow","away_yellow"], ["red_cards","home_red","away_red"]
+    ];
+    const upserts = [];
+    let importedMatches = 0, fieldsImported = 0, preserved = 0;
+    for (const { match, external } of candidates) {
+      const merged = { ...(existing.get(String(match.id)) || {}) };
+      let added = 0;
+      for (const [field, homeColumn, awayColumn] of columns) {
+        const home = getNumber(external[homeColumn]), away = getNumber(external[awayColumn]);
+        if (home === null && away === null) continue;
+        const previous = merged[field];
+        if (previous && (getNumber(previous.home) !== null || getNumber(previous.away) !== null)) {
+          preserved++; continue;
+        }
+        merged[field] = { home, away, source_key: "open-matchday:" + homeColumn + "/" + awayColumn, source: "open-matchday" };
+        added++;
+      }
+      if (added) {
+        upserts.push({ match_id: String(match.id), league_id: leagueId,
+          match_date: match.match_date, normalized_stats: merged, updated_at: new Date().toISOString() });
+        importedMatches++; fieldsImported += added;
+      }
+    }
+    for (let offset = 0; offset < upserts.length; offset += 100) {
+      const { error } = await supabase.from("match_statistics")
+        .upsert(upserts.slice(offset, offset + 100), { onConflict: "match_id" });
+      if (error) throw error;
+    }
+    res.json({
+      ok: true, source: "open-matchday", usage: "private_non_commercial_only",
+      league_id: leagueId, league: pitchLeagueName, folder, season,
+      csv_rows: rows.length, strict_matches_matched: candidates.length,
+      matches_with_new_statistics: importedMatches, statistic_fields_imported: fieldsImported,
+      existing_values_preserved: preserved, unmatched_rows: unmatched,
+      score_conflicts: scoreConflicts, ambiguous_matches: ambiguous,
+      note: "Abbinamento rigoroso su campionato, data, squadre e risultato. Nessun ID sintetico; statistiche già presenti preservate; campi vuoti non convertiti in zero."
+    });
+  } catch (error) { handleError(res, error); }
 });
 
 app.get(
