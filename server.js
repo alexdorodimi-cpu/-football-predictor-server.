@@ -3777,6 +3777,18 @@ app.use(express.static(
   path.join(__dirname, "public")
 ));
 
+app.get("/api/sync/automatic/status", (req, res) => {
+  res.json({
+    ok: true,
+    enabled: Boolean(supabase && PITCHAPI_KEY),
+    running: automaticResultsSyncRunning,
+    interval_hours: 12,
+    last_run: automaticResultsSyncLastRun,
+    last_report: automaticResultsSyncLastReport,
+    note: "Sincronizza i risultati conclusi delle stagioni piu' recenti dei campionati gia' presenti in Supabase. Su hosting con sospensione del processo, il job riparte quando il servizio viene riattivato."
+  });
+});
+
 // ==========================================
 // ROTTA NON TROVATA
 // ==========================================
@@ -3887,18 +3899,6 @@ async function runAutomaticResultsSync() {
 // Render puo' sospendere i servizi gratuiti inattivi: il job parte all'avvio
 // e poi ogni 12 ore mentre il processo rimane attivo.
 const AUTOMATIC_RESULTS_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
-
-app.get("/api/sync/automatic/status", (req, res) => {
-  res.json({
-    ok: true,
-    enabled: Boolean(supabase && PITCHAPI_KEY),
-    running: automaticResultsSyncRunning,
-    interval_hours: 12,
-    last_run: automaticResultsSyncLastRun,
-    last_report: automaticResultsSyncLastReport,
-    note: "Sincronizza i risultati conclusi delle stagioni piu' recenti dei campionati gia' presenti in Supabase. Su hosting con sospensione del processo, il job riparte quando il servizio viene riattivato."
-  });
-});
 
 app.listen(PORT, () => {
   console.log(`Football Predictor Server attivo sulla porta ${PORT}`);
