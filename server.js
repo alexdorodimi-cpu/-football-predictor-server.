@@ -2547,6 +2547,7 @@ app.get(
         });
       }
 
+      const allSeasons = String(req.query.all_seasons || "").toLowerCase() === "true";
       const season = req.query.season
         ? String(req.query.season).trim()
         : null;
