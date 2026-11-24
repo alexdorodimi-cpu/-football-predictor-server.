@@ -2283,6 +2283,213 @@ app.get(
 );
 
 // ==========================================
+// BACKTEST COMPLETO A BLOCCHI (JOB ASINCRONO)
+// ==========================================
+const bulkBacktestJobs = new Map();
+
+function aggregateBulkMarket(target, source) {
+  for (const [market, metric] of Object.entries(source || {})) {
+    const row = target[market] || {
+      evaluated: 0, correct: 0, tp: 0, tn: 0, fp: 0, fn: 0,
+      positive_actual: 0, negative_actual: 0, brier_sum: 0, brier_n: 0
+    };
+    const evaluated = Number(metric.evaluated || 0);
+    row.evaluated += evaluated;
+    row.correct += Number(metric.correct || 0);
+    row.tp += Number(metric.true_positive || 0);
+    row.tn += Number(metric.true_negative || 0);
+    row.fp += Number(metric.false_positive || 0);
+    row.fn += Number(metric.false_negative || 0);
+    row.positive_actual += Number(metric.positive_actual || 0);
+    row.negative_actual += Number(metric.negative_actual || 0);
+    if (metric.brier_score !== undefined && metric.brier_score !== null && evaluated > 0) {
+      row.brier_sum += Number(metric.brier_score) * evaluated;
+      row.brier_n += evaluated;
+    }
+    target[market] = row;
+  }
+}
+
+function finalizeBulkMarkets(source) {
+  return Object.fromEntries(Object.entries(source).map(([market, row]) => {
+    const sensitivity = row.tp + row.fn ? row.tp / (row.tp + row.fn) : null;
+    const specificity = row.tn + row.fp ? row.tn / (row.tn + row.fp) : null;
+    const baseline = row.evaluated
+      ? Math.max(row.positive_actual, row.negative_actual) / row.evaluated * 100
+      : null;
+    return [market, {
+      evaluated: row.evaluated,
+      correct: row.correct,
+      accuracy: row.evaluated ? Number((row.correct / row.evaluated * 100).toFixed(2)) : null,
+      positive_actual: row.positive_actual,
+      negative_actual: row.negative_actual,
+      true_positive: row.tp,
+      true_negative: row.tn,
+      false_positive: row.fp,
+      false_negative: row.fn,
+      sensitivity_percent: sensitivity === null ? null : Number((sensitivity * 100).toFixed(2)),
+      specificity_percent: specificity === null ? null : Number((specificity * 100).toFixed(2)),
+      balanced_accuracy_percent: sensitivity === null || specificity === null
+        ? null : Number(((sensitivity + specificity) / 2 * 100).toFixed(2)),
+      majority_baseline_accuracy_percent: baseline === null ? null : Number(baseline.toFixed(2)),
+      beats_majority_baseline: baseline !== null && row.evaluated > 0 &&
+        row.correct / row.evaluated * 100 > baseline,
+      brier_score: row.brier_n ? Number((row.brier_sum / row.brier_n).toFixed(4)) : null
+    }];
+  }));
+}
+
+async function runBulkBacktestJob(job) {
+  const aggregateStats = {};
+  const aggregateGoals = {};
+  const baseUrl = `http://127.0.0.1:${PORT}`;
+  try {
+    for (let offset = 0; offset < job.maxMatches; offset += job.batchSize) {
+      const url = new URL(`/api/backtest/${encodeURIComponent(job.leagueId)}`, baseUrl);
+      url.searchParams.set("limit", String(job.batchSize));
+      url.searchParams.set("offset", String(offset));
+      url.searchParams.set("season", job.season);
+      url.searchParams.set("include_stats", "true");
+      url.searchParams.set("stats_limit", String(job.batchSize));
+      url.searchParams.set("summary", "true");
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(180000)
+      });
+      const raw = await response.text();
+      let data;
+      try { data = JSON.parse(raw); } catch { throw new Error(`Risposta non JSON al blocco offset ${offset}.`); }
+      if (!response.ok || data?.ok !== true) {
+        throw new Error(`Blocco offset ${offset}: HTTP ${response.status} - ${data?.error || "errore backtest"}`);
+      }
+
+      aggregateBulkMarket(aggregateStats, data.statistical_accuracy_by_market);
+      aggregateBulkMarket(aggregateGoals, data.accuracy_by_market);
+      const statRows = Object.entries(data.statistical_accuracy_by_market || {})
+        .filter(([, m]) => m.beats_majority_baseline === true &&
+          Number(m.positive_actual || 0) >= 4 && Number(m.negative_actual || 0) >= 4 &&
+          Number.isFinite(Number(m.balanced_accuracy_percent)))
+        .sort((a, b) => Number(b[1].balanced_accuracy_percent) - Number(a[1].balanced_accuracy_percent))
+        .slice(0, 15)
+        .map(([market, metric]) => ({ market, ...metric }));
+
+      job.blocks.push({
+        block: job.blocks.length + 1,
+        offset,
+        matches_selected: Number(data.evaluation_matches_selected || 0),
+        matches_evaluated: Number(data.evaluated_matches || 0),
+        period: data.evaluation_period || null,
+        accuracy_by_market: data.accuracy_by_market || {},
+        advanced_metrics: data.advanced_metrics || {},
+        statistical_matches: Number(data.statistical_backtest?.evaluated_matches || 0),
+        statistical_markets_count: Object.keys(data.statistical_accuracy_by_market || {}).length,
+        top_statistical_markets: statRows
+      });
+      job.completedMatches += Number(data.evaluated_matches || 0);
+      job.completedBlocks = job.blocks.length;
+      job.nextOffset = Number(data.next_offset ?? offset + job.batchSize);
+      job.updatedAt = new Date().toISOString();
+
+      if (data.done || !data.evaluation_matches_selected) break;
+    }
+
+    job.result = {
+      ok: true,
+      league_id: job.leagueId,
+      season: job.season,
+      requested_matches_max: job.maxMatches,
+      batch_size: job.batchSize,
+      blocks_completed: job.blocks.length,
+      evaluated_matches: job.completedMatches,
+      statistical_markets_aggregated: finalizeBulkMarkets(aggregateStats),
+      goal_markets_aggregated: finalizeBulkMarkets(aggregateGoals),
+      blocks: job.blocks,
+      completed_at: new Date().toISOString(),
+      notes: [
+        "Le accuratezze aggregate sono calcolate sommando conteggi e matrici di confusione dei blocchi.",
+        "Le voci 1/X/2 vanno interpretate con cautela: il report standard può ripetere la stessa metrica aggregata per tutte e tre.",
+        "Balanced accuracy e baseline maggioritaria sono più informative della sola accuracy per mercati sbilanciati."
+      ]
+    };
+    job.status = "completed";
+  } catch (error) {
+    job.status = "failed";
+    job.error = error.message;
+  } finally {
+    job.updatedAt = new Date().toISOString();
+  }
+}
+
+app.post("/api/backtest/bulk/start/:leagueId", requireDatabase, (req, res) => {
+  const leagueId = String(req.params.leagueId || "");
+  if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
+    return res.status(400).json({ ok: false, error: "ID campionato non valido." });
+  }
+  const season = String(req.query.season || "2026/2027");
+  if (!/^\d{4}\/\d{4}$/.test(season)) {
+    return res.status(400).json({ ok: false, error: "Stagione non valida. Usa YYYY/YYYY." });
+  }
+  const maxMatches = Math.min(1000, Math.max(1, Number.parseInt(req.query.matches || "1000", 10) || 1000));
+  const batchSize = Math.min(20, Math.max(5, Number.parseInt(req.query.batch_size || "20", 10) || 20));
+  const active = [...bulkBacktestJobs.values()].find(job =>
+    job.status === "running" && job.leagueId === leagueId && job.season === season
+  );
+  if (active) {
+    return res.status(202).json({
+      ok: true, already_running: true, job_id: active.id,
+      status_url: `/api/backtest/bulk/${active.id}`,
+      result_url: `/api/backtest/bulk/${active.id}/result`
+    });
+  }
+  const id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  const job = {
+    id, leagueId, season, maxMatches, batchSize, status: "running",
+    blocks: [], completedBlocks: 0, completedMatches: 0, nextOffset: 0,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    result: null, error: null
+  };
+  bulkBacktestJobs.set(id, job);
+  setTimeout(() => runBulkBacktestJob(job), 0);
+  res.status(202).json({
+    ok: true, message: "Backtest completo avviato in background.",
+    job_id: id, status_url: `/api/backtest/bulk/${id}`,
+    result_url: `/api/backtest/bulk/${id}/result`,
+    expected_blocks: Math.ceil(maxMatches / batchSize),
+    batch_size: batchSize, requested_matches: maxMatches
+  });
+});
+
+app.get("/api/backtest/bulk/:jobId", (req, res) => {
+  const job = bulkBacktestJobs.get(String(req.params.jobId));
+  if (!job) return res.status(404).json({ ok: false, error: "Job non trovato o scaduto." });
+  res.json({
+    ok: true, job_id: job.id, status: job.status,
+    completed_blocks: job.completedBlocks,
+    expected_blocks: Math.ceil(job.maxMatches / job.batchSize),
+    completed_matches: job.completedMatches,
+    next_offset: job.nextOffset,
+    updated_at: job.updatedAt,
+    error: job.error,
+    result_url: job.status === "completed" ? `/api/backtest/bulk/${job.id}/result` : null
+  });
+});
+
+app.get("/api/backtest/bulk/:jobId/result", (req, res) => {
+  const job = bulkBacktestJobs.get(String(req.params.jobId));
+  if (!job) return res.status(404).json({ ok: false, error: "Job non trovato o scaduto." });
+  if (job.status !== "completed") {
+    return res.status(409).json({
+      ok: false, status: job.status, completed_blocks: job.completedBlocks,
+      expected_blocks: Math.ceil(job.maxMatches / job.batchSize),
+      error: job.error || "Il backtest è ancora in esecuzione."
+    });
+  }
+  res.setHeader("Content-Disposition", `attachment; filename="football-predictor-backtest-${job.leagueId}-${job.season.replace("/", "-")}.json"`);
+  res.json(job.result);
+});
+
+// ==========================================
 // BACKTEST MODELLO
 // ==========================================
 
