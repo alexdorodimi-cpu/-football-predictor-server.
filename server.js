@@ -2811,7 +2811,7 @@ app.get(
           specificity_percent: specificity === null ? null : Number((specificity * 100).toFixed(2)),
           balanced_accuracy_percent: balancedAccuracy === null ? null : Number((balancedAccuracy * 100).toFixed(2)),
           majority_baseline_accuracy_percent: Number((majorityBaseline * 100).toFixed(2)),
-          beats_majority_baseline: balancedAccuracy !== null && balancedAccuracy > 0.5,
+          beats_majority_baseline: correctCount / evaluated > majorityBaseline,
           brier_score: Number((brier / evaluated).toFixed(4))
         };
       }
