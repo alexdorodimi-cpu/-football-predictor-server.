@@ -2378,6 +2378,7 @@ app.get(
         if (toDate && day > toDate) return false;
         return true;
       });
+      const summaryOnly = String(req.query.summary || "").toLowerCase() === "true";
       const includeStats = String(req.query.include_stats || "").toLowerCase() === "true";
       const statsEvaluationLimit = Math.min(Math.max(Number(req.query.stats_limit) || 20, 1), 300);
       const offset = Math.max(0, Number.parseInt(req.query.offset || "0", 10) || 0);
@@ -2861,7 +2862,7 @@ app.get(
         };
       }
 
-      res.json({
+      const responsePayload = {
         ok: true,
         league_id: leagueId,
         season,
@@ -2893,8 +2894,15 @@ app.get(
         },
         advanced_metrics: advancedMetrics,
         model: "Poisson con shrinkage bayesiano",
-        results
-      });
+        results: summaryOnly ? undefined : results,
+        results_summary: summaryOnly ? {
+          returned: 0,
+          omitted_detail_rows: results.length,
+          matches_with_actual_statistics: results.filter(r => r.actual_statistics).length,
+          matches_with_statistical_forecast: results.filter(r => r.statistical_forecast).length
+        } : undefined
+      };
+      res.json(responsePayload);
     } catch (error) {
       handleError(res, error);
     }
