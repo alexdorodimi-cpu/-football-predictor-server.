@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const { createClient } = require("@supabase/supabase-js");
 const path = require("path");
 const pdfParse = require("pdf-parse");
+const { predictRandomForest } = require("./random-forest");
 
 const app = express();
 
@@ -992,6 +993,26 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
       XG_BLEND_WEIGHT * Number(xgAverages.away)
     ));
   }
+  // Random Forest sperimentale: addestramento su partite precedenti al target.
+  // Non sostituisce Poisson; contribuisce solo se esiste uno storico sufficiente.
+  const randomForestForecast = predictRandomForest(history, {
+    home_team: homeName,
+    away_team: awayName,
+    match_date: fixtureDate
+  });
+  const RANDOM_FOREST_BLEND_WEIGHT = randomForestForecast.applied ? 0.20 : 0;
+  const lambdasBeforeRandomForest = { home: homeLambda, away: awayLambda };
+  if (randomForestForecast.applied) {
+    homeLambda = Math.max(0.10, Math.min(4.5,
+      (1 - RANDOM_FOREST_BLEND_WEIGHT) * homeLambda +
+      RANDOM_FOREST_BLEND_WEIGHT * randomForestForecast.home
+    ));
+    awayLambda = Math.max(0.10, Math.min(4.5,
+      (1 - RANDOM_FOREST_BLEND_WEIGHT) * awayLambda +
+      RANDOM_FOREST_BLEND_WEIGHT * randomForestForecast.away
+    ));
+  }
+
   if (lineupImpact?.applied) {
     homeLambda *= lineupImpact.home_attack_factor / lineupImpact.away_defence_factor;
     awayLambda *= lineupImpact.away_attack_factor / lineupImpact.home_defence_factor;
@@ -1098,6 +1119,7 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
       "shrinkage bayesiano",
       "rendimento casa/trasferta",
       ...(xgReady ? ["integrazione xG storici (25%)"] : []),
+      ...(randomForestForecast.applied ? ["Random Forest regressore gol (20%, sperimentale)"] : []),
       ...(lineupImpact?.applied ? ["forma titolari (sperimentale)"] : [])
     ].join(" + "),
 
@@ -1148,6 +1170,14 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
         venue_weight: 0.7
       },
       venue_split_used: homeVenueReady && awayVenueReady,
+      random_forest: {
+        ...randomForestForecast,
+        blend_weight: RANDOM_FOREST_BLEND_WEIGHT,
+        lambdas_before: {
+          home: Number(lambdasBeforeRandomForest.home.toFixed(3)),
+          away: Number(lambdasBeforeRandomForest.away.toFixed(3))
+        }
+      },
       xg_adjustment: {
         applied: xgReady,
         blend_weight: xgReady ? XG_BLEND_WEIGHT : 0,
