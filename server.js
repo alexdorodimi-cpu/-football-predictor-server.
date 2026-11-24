@@ -2743,12 +2743,16 @@ app.get(
               : null,
             calibration_by_outcome: outcomeCalibrationByModel
           },
-          over_1_5: marketMetricsForModel("over_1_5", "over_1_5"),
-          over_2_5: marketMetricsForModel("over_2_5", "over_2_5"),
-          over_3_5: marketMetricsForModel("over_3_5", "over_3_5"),
-          btts_yes: marketMetricsForModel("btts_yes", "btts_yes"),
-          under_0_5: marketMetricsForModel("under_0_5", "under_0_5"),
           over_0_5: marketMetricsForModel("over_0_5", "over_0_5"),
+          under_0_5: marketMetricsForModel("under_0_5", "under_0_5"),
+          over_1_5: marketMetricsForModel("over_1_5", "over_1_5"),
+          under_1_5: marketMetricsForModel("under_1_5", "under_1_5"),
+          over_2_5: marketMetricsForModel("over_2_5", "over_2_5"),
+          under_2_5: marketMetricsForModel("under_2_5", "under_2_5"),
+          over_3_5: marketMetricsForModel("over_3_5", "over_3_5"),
+          under_3_5: marketMetricsForModel("under_3_5", "under_3_5"),
+          btts_yes: marketMetricsForModel("btts_yes", "btts_yes"),
+          btts_no: marketMetricsForModel("btts_no", "btts_no"),
           under_4_5: marketMetricsForModel("under_4_5", "under_4_5"),
           over_4_5: marketMetricsForModel("over_4_5", "over_4_5"),
           double_chance_1x: marketMetricsForModel("double_chance_1x", "double_chance_1x"),
@@ -3808,21 +3812,3 @@ app.use((error, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(
-    `Football Predictor AI attivo sulla porta ${PORT}`
-  );
-
-  console.log(
-    "PitchAPI key configurata:",
-    Boolean(PITCHAPI_KEY)
-  );
-
-  console.log(
-    "Access token configurato:",
-    Boolean(ACCESS_TOKEN)
-  );
-
-  console.log(
-    "Supabase configurato:",
-    Boolean(supabase)
-  );
-});
