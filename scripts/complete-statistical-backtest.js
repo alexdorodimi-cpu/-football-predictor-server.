@@ -54,10 +54,23 @@ async function main() {
     matches += Number(data.evaluated_matches || 0);
     statMatches += Number(data.statistical_backtest?.evaluated_matches || 0);
     for (const [market, metric] of Object.entries(data.statistical_accuracy_by_market || {})) {
-      const row = totals.get(market) || { evaluated: 0, correct: 0, brierSum: 0 };
+      const row = totals.get(market) || {
+        evaluated: 0, correct: 0, brierSum: 0,
+        tp: 0, tn: 0, fp: 0, fn: 0,
+        positiveActual: 0, negativeActual: 0,
+        predictedOver: 0, predictedUnder: 0
+      };
       row.evaluated += Number(metric.evaluated || 0);
       row.correct += Number(metric.correct || 0);
       row.brierSum += Number(metric.brier_score || 0) * Number(metric.evaluated || 0);
+      row.tp += Number(metric.true_positive || 0);
+      row.tn += Number(metric.true_negative || 0);
+      row.fp += Number(metric.false_positive || 0);
+      row.fn += Number(metric.false_negative || 0);
+      row.positiveActual += Number(metric.positive_actual || 0);
+      row.negativeActual += Number(metric.negative_actual || 0);
+      row.predictedOver += Number(metric.predicted_over || 0);
+      row.predictedUnder += Number(metric.predicted_under || 0);
       totals.set(market, row);
     }
     console.log(JSON.stringify({
@@ -78,6 +91,26 @@ async function main() {
     evaluated: row.evaluated,
     correct: row.correct,
     accuracy_percent: row.evaluated ? Number((row.correct / row.evaluated * 100).toFixed(2)) : null,
+    positive_actual: row.positiveActual,
+    negative_actual: row.negativeActual,
+    predicted_over: row.predictedOver,
+    predicted_under: row.predictedUnder,
+    true_positive: row.tp,
+    true_negative: row.tn,
+    false_positive: row.fp,
+    false_negative: row.fn,
+    positive_rate_percent: row.evaluated ? Number((row.positiveActual / row.evaluated * 100).toFixed(2)) : null,
+    sensitivity_percent: row.tp + row.fn ? Number((row.tp / (row.tp + row.fn) * 100).toFixed(2)) : null,
+    specificity_percent: row.tn + row.fp ? Number((row.tn / (row.tn + row.fp) * 100).toFixed(2)) : null,
+    balanced_accuracy_percent: row.tp + row.fn && row.tn + row.fp
+      ? Number((((row.tp / (row.tp + row.fn)) + (row.tn / (row.tn + row.fp))) / 2 * 100).toFixed(2))
+      : null,
+    majority_baseline_accuracy_percent: row.evaluated
+      ? Number((Math.max(row.positiveActual, row.negativeActual) / row.evaluated * 100).toFixed(2))
+      : null,
+    beats_majority_baseline: row.tp + row.fn > 0 && row.tn + row.fp > 0
+      ? ((row.tp / (row.tp + row.fn)) + (row.tn / (row.tn + row.fp))) / 2 > 0.5
+      : false,
     brier_score: row.evaluated ? Number((row.brierSum / row.evaluated).toFixed(4)) : null
   }]));
   console.log(JSON.stringify({
