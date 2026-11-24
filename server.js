@@ -3808,7 +3808,108 @@ app.use((error, req, res, next) => {
 
 // ==========================================
 // AVVIO SERVER
-// ==========================================
+// Sincronizzazione automatica dei risultati conclusi per i campionati
+// gia' presenti in Supabase. I dati nuovi entrano nello storico rolling;
+// calculatePrediction continua a usare solo gare precedenti al fixture.
+
+let automaticResultsSyncRunning = false;
+let automaticResultsSyncLastRun = null;
+let automaticResultsSyncLastReport = null;
+
+async function runAutomaticResultsSync() {
+  if (!supabase || !PITCHAPI_KEY || automaticResultsSyncRunning) return;
+  automaticResultsSyncRunning = true;
+  const startedAt = new Date().toISOString();
+  const report = {
+    started_at: startedAt,
+    leagues_checked: 0,
+    matches_received: 0,
+    rows_upserted: 0,
+    errors: []
+  };
+
+  try {
+    const { data: knownRows, error: queryError } = await supabase
+      .from("matches")
+      .select("league_id,season,match_date")
+      .not("league_id", "is", null)
+      .not("season", "is", null)
+      .order("match_date", { ascending: false })
+      .limit(5000);
+
+    if (queryError) throw queryError;
+
+    // Per ogni campionato usa la stagione piu' recente gia' registrata.
+    const latestSeasonByLeague = new Map();
+    for (const row of knownRows || []) {
+      const leagueId = String(row.league_id || "");
+      const season = String(row.season || "");
+      if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) continue;
+      if (!/^(?:\d{4}\/\d{4}|\d{4})$/.test(season)) continue;
+      if (!latestSeasonByLeague.has(leagueId)) {
+        latestSeasonByLeague.set(leagueId, season);
+      }
+    }
+
+    for (const [leagueId, season] of latestSeasonByLeague.entries()) {
+      report.leagues_checked++;
+      try {
+        const body = await sportGet(
+          `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=played`
+        );
+        const matches = getMatches(body);
+        const saved = await saveMatchesToDatabase(matches, season, leagueId);
+        report.matches_received += matches.length;
+        report.rows_upserted += saved;
+      } catch (error) {
+        report.errors.push({
+          league_id: leagueId,
+          season,
+          error: error.message
+        });
+        console.error(`Sync risultati fallita per ${leagueId} ${season}:`, error.message);
+      }
+    }
+  } catch (error) {
+    report.errors.push({ error: error.message });
+    console.error("Sync automatica risultati fallita:", error.message);
+  } finally {
+    report.finished_at = new Date().toISOString();
+    automaticResultsSyncLastRun = report.finished_at;
+    automaticResultsSyncLastReport = report;
+    automaticResultsSyncRunning = false;
+    console.log("Sync automatica risultati completata:", JSON.stringify(report));
+  }
+
+  return report;
+}
+
+// Render puo' sospendere i servizi gratuiti inattivi: il job parte all'avvio
+// e poi ogni 12 ore mentre il processo rimane attivo.
+const AUTOMATIC_RESULTS_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
+
+app.get("/api/sync/automatic/status", (req, res) => {
+  res.json({
+    ok: true,
+    enabled: Boolean(supabase && PITCHAPI_KEY),
+    running: automaticResultsSyncRunning,
+    interval_hours: 12,
+    last_run: automaticResultsSyncLastRun,
+    last_report: automaticResultsSyncLastReport,
+    note: "Sincronizza i risultati conclusi delle stagioni piu' recenti dei campionati gia' presenti in Supabase. Su hosting con sospensione del processo, il job riparte quando il servizio viene riattivato."
+  });
+});
 
 app.listen(PORT, () => {
-  console.log(
+  console.log(`Football Predictor Server attivo sulla porta ${PORT}`);
+  setTimeout(() => {
+    runAutomaticResultsSync().catch(error =>
+      console.error("Avvio sync automatica non riuscito:", error.message)
+    );
+  }, 60 * 1000);
+  setInterval(() => {
+    runAutomaticResultsSync().catch(error =>
+      console.error("Sync periodica non riuscita:", error.message)
+    );
+  }, AUTOMATIC_RESULTS_SYNC_INTERVAL_MS);
+});
