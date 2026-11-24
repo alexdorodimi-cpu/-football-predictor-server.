@@ -3795,6 +3795,68 @@ app.get("/api/sync/automatic/status", (req, res) => {
   });
 });
 
+// Copertura reale dello storico: confronta gli ID delle partite concluse
+// con gli ID presenti in match_statistics, senza assumere che i conteggi coincidano.
+app.get("/api/sync/statistics/coverage", requireDatabase, async (req, res) => {
+  try {
+    const pageSize = 1000;
+    let offset = 0;
+    let completedMatches = 0;
+    let matchesWithStatistics = 0;
+    let matchesWithoutStatistics = 0;
+    let invalidMatchIds = 0;
+    const now = new Date().toISOString();
+
+    while (true) {
+      const { data: matches, error: matchesError } = await supabase
+        .from("matches")
+        .select("id")
+        .not("home_goals", "is", null)
+        .not("away_goals", "is", null)
+        .not("match_date", "is", null)
+        .lte("match_date", now)
+        .order("match_date", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (matchesError) throw matchesError;
+
+      const page = matches || [];
+      if (!page.length) break;
+      completedMatches += page.length;
+
+      const ids = page.map(row => String(row.id)).filter(Boolean);
+      invalidMatchIds += page.length - ids.length;
+      if (ids.length) {
+        const { data: stats, error: statsError } = await supabase
+          .from("match_statistics")
+          .select("match_id")
+          .in("match_id", ids);
+        if (statsError) throw statsError;
+        const present = new Set((stats || []).map(row => String(row.match_id)));
+        matchesWithStatistics += present.size;
+        matchesWithoutStatistics += ids.length - present.size;
+      }
+
+      if (page.length < pageSize) break;
+      offset += page.length;
+    }
+
+    res.json({
+      ok: true,
+      completed_matches: completedMatches,
+      matches_with_statistics: matchesWithStatistics,
+      matches_without_statistics: matchesWithoutStatistics,
+      coverage_percent: completedMatches
+        ? Number((matchesWithStatistics / completedMatches * 100).toFixed(2))
+        : 0,
+      invalid_match_ids: invalidMatchIds,
+      page_size: pageSize,
+      note: "Conteggio calcolato confrontando gli ID delle partite concluse con match_statistics; una riga presente non garantisce che ogni singola metrica sia valorizzata."
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
 // ==========================================
 // ROTTA NON TROVATA
 // ==========================================
