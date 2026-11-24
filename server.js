@@ -3879,7 +3879,7 @@ async function runAutomaticResultsSync() {
           );
         } catch (primaryError) {
           // Alcuni campionati accettano l'anno iniziale (2026) invece della forma 2026/2027.
-          const startYear = String(season).match(/^(\\d{4})\\/\\d{4}$/)?.[1];
+          const startYear = String(season).match(/^(\d{4})\/\d{4}$/)?.[1];
           if (!startYear || !/invalid season year/i.test(primaryError.message || "")) throw primaryError;
           body = await sportGet(
             `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(startYear)}&status=played`
