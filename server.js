@@ -3508,6 +3508,44 @@ app.get(
         };
       }
 
+      // Analisi per soglia: misura accuracy e copertura senza nascondere
+      // quante previsioni vengono scartate. Le soglie non vengono ottimizzate
+      // sullo stesso campione e non costituiscono una garanzia futura.
+      const thresholdAnalysis = {};
+      const binaryThresholdKeys = selectedMarketKeys.filter(key => !["1", "X", "2"].includes(key));
+      for (const key of binaryThresholdKeys) {
+        const actualKey = key;
+        const rows = results.filter(row =>
+          Number.isFinite(Number(row.probabilities?.[key])) &&
+          typeof row.actual_markets?.[actualKey] === "boolean"
+        );
+        thresholdAnalysis[key] = [50, 55, 60, 65, 70, 75, 80, 85, 90].map(threshold => {
+          const selected = rows.filter(row => Number(row.probabilities[key]) >= threshold);
+          const correctCount = selected.filter(row => row.actual_markets[actualKey]).length;
+          return {
+            threshold_percent: threshold,
+            evaluated: selected.length,
+            correct: correctCount,
+            accuracy_percent: selected.length ? Number((correctCount / selected.length * 100).toFixed(2)) : null,
+            coverage_percent: rows.length ? Number((selected.length / rows.length * 100).toFixed(2)) : null
+          };
+        });
+      }
+      thresholdAnalysis["1X2_top_pick"] = [50, 55, 60, 65, 70, 75, 80, 85, 90].map(threshold => {
+        const selected = results.filter(row => {
+          const top = Math.max(...["1", "X", "2"].map(key => Number(row.probabilities?.[key]) || 0));
+          return top >= threshold;
+        });
+        const hits = selected.filter(row => row.correct_1x2).length;
+        return {
+          threshold_percent: threshold,
+          evaluated: selected.length,
+          correct: hits,
+          accuracy_percent: selected.length ? Number((hits / selected.length * 100).toFixed(2)) : null,
+          coverage_percent: evaluated ? Number((selected.length / evaluated * 100).toFixed(2)) : null
+        };
+      });
+
       const responsePayload = {
         ok: true,
         league_id: leagueId,
@@ -3529,6 +3567,7 @@ app.get(
         },
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
+        threshold_analysis: thresholdAnalysis,
         statistical_accuracy_by_market: includeStats ? statisticalAccuracyByMarket : null,
         statistical_backtest: {
           enabled: includeStats,
@@ -3555,6 +3594,67 @@ app.get(
     }
   }
 );
+
+// Report giornaliero CSV delle previsioni. Senza quote affidabili non
+// calcola value/ROI e segnala esplicitamente "nessuna giocata".
+app.get("/api/reports/daily.csv", requireDatabase, async (req, res) => {
+  try {
+    const date = String(req.query.date || new Date().toISOString().slice(0, 10));
+    const leagueId = req.query.league_id ? String(req.query.league_id) : null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+        new Date(date + "T00:00:00Z").toISOString().slice(0, 10) !== date) {
+      return res.status(400).json({ ok: false, error: "Data non valida. Usa YYYY-MM-DD." });
+    }
+    if (leagueId && !/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
+      return res.status(400).json({ ok: false, error: "ID campionato non valido." });
+    }
+    let query = supabase.from("matches").select("*")
+      .gte("match_date", date + "T00:00:00.000Z")
+      .lt("match_date", new Date(Date.parse(date + "T00:00:00Z") + 86400000).toISOString())
+      .order("match_date", { ascending: true }).limit(500);
+    if (leagueId) query = query.eq("league_id", leagueId);
+    const { data: fixtures, error } = await query;
+    if (error) throw error;
+    const historyByLeague = new Map();
+    const csvRows = [];
+    for (const fixture of fixtures || []) {
+      if (isFinished(fixture)) continue;
+      const id = String(fixture.league_id);
+      if (!historyByLeague.has(id)) {
+        historyByLeague.set(id, await getLeagueMatchesFromDatabase(id, fixture.season));
+      }
+      const prediction = calculatePrediction(fixture, historyByLeague.get(id));
+      if (!prediction?.ok || !prediction.probabilities) continue;
+      const p = prediction.probabilities;
+      const fields = [
+        date, fixture.match_date, fixture.league_name || "", fixture.season || "",
+        fixture.id, fixture.home_team, fixture.away_team,
+        p["1"], p["X"], p["2"], p.over_1_5, p.under_1_5,
+        p.over_2_5, p.under_2_5, p.over_3_5, p.under_3_5,
+        p.btts_yes, p.btts_no,
+        "", "", "NESSUNA_GIOCATA_QUOTE_NON_DISPONIBILI"
+      ];
+      csvRows.push(fields);
+    }
+    const headers = [
+      "report_date","kickoff","league","season","match_id","home_team","away_team",
+      "p_1","p_x","p_2","p_over_1_5","p_under_1_5","p_over_2_5","p_under_2_5",
+      "p_over_3_5","p_under_3_5","p_btts_yes","p_btts_no",
+      "odds","value_p_times_odds","decision"
+    ];
+    const escapeCsv = value => {
+      if (value === null || value === undefined) return "";
+      const text = String(value);
+      return /[",\r\n;]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    };
+    const csv = [headers, ...csvRows].map(row => row.map(escapeCsv).join(";")).join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="football-predictor-' + date + '.csv"');
+    res.send("\uFEFF" + csv);
+  } catch (error) {
+    handleError(res, error);
+  }
+});
 
 // Normalizza le statistiche PitchAPI: supporta gruppi/items, stats indicizzate,
 // periodi differenti e varianti dei nomi delle statistiche.
