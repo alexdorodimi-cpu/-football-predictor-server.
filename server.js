@@ -3978,43 +3978,50 @@ async function runAutomaticResultsSync() {
 let automaticStatisticsSyncRunning = false;
 let automaticStatisticsSyncLastRun = null;
 let automaticStatisticsSyncLastReport = null;
-let automaticStatisticsSyncOffset = 0;
 
 async function runAutomaticStatisticsSync() {
   if (!supabase || !PITCHAPI_KEY || automaticStatisticsSyncRunning) return;
   automaticStatisticsSyncRunning = true;
-  const report = { started_at: new Date().toISOString(), matches_scanned: 0, statistics_saved: 0, failed: 0, errors: [] };
+  const report = { started_at: new Date().toISOString(), matches_scanned: 0, statistics_saved: 0, already_present: 0, failed: 0, errors: [] };
   try {
+    const retryBefore = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: matches, error: matchesError } = await supabase
       .from("matches")
-      .select("id,league_id,match_date,home_goals,away_goals")
+      .select("id,league_id,match_date")
       .not("home_goals", "is", null)
       .not("away_goals", "is", null)
       .not("match_date", "is", null)
       .lte("match_date", new Date().toISOString())
-      .order("match_date", { ascending: false })
-      .range(automaticStatisticsSyncOffset, automaticStatisticsSyncOffset + 99);
+      .or("statistics_sync_attempted_at.is.null,statistics_sync_attempted_at.lt." + retryBefore)
+      .order("match_date", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(100);
     if (matchesError) throw matchesError;
+
     const scanned = matches || [];
     report.matches_scanned = scanned.length;
-    if (!scanned.length) {
-      automaticStatisticsSyncOffset = 0;
-    } else {
+    if (scanned.length) {
       const ids = scanned.map(match => String(match.id));
       const { data: existing, error: existingError } = await supabase
         .from("match_statistics").select("match_id").in("match_id", ids);
       if (existingError) throw existingError;
       const existingIds = new Set((existing || []).map(row => String(row.match_id)));
       const missing = scanned.filter(match => !existingIds.has(String(match.id)));
+      report.already_present = scanned.length - missing.length;
+
       const fetched = await mapWithConcurrency(missing, 5, async match => {
         try {
           const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
-          return { match_id: String(match.id), league_id: String(match.league_id), match_date: match.match_date,
-            normalized_stats: getNormalizedMatchStats(body), updated_at: new Date().toISOString() };
+          const normalized = getNormalizedMatchStats(body);
+          return normalized
+            ? { match_id: String(match.id), league_id: String(match.league_id), match_date: match.match_date,
+                normalized_stats: normalized, updated_at: new Date().toISOString() }
+            : { match_id: String(match.id), unavailable: true };
         } catch (error) {
           return { match_id: String(match.id), error: error.message };
         }
       });
+
       const successful = fetched.filter(row => row && row.normalized_stats);
       if (successful.length) {
         const { error } = await supabase.from("match_statistics").upsert(successful, { onConflict: "match_id" });
@@ -4023,10 +4030,16 @@ async function runAutomaticStatisticsSync() {
       report.statistics_saved = successful.length;
       const failures = fetched.filter(row => row?.error);
       report.failed = failures.length;
+      report.unavailable = fetched.filter(row => row?.unavailable).length;
       report.errors = failures.slice(0, 10).map(row => ({ match_id: row.match_id, error: row.error }));
-      // Avanza di una pagina; al termine riparte dall'inizio per intercettare nuove partite.
-      automaticStatisticsSyncOffset += scanned.length;
-      if (scanned.length < 100) automaticStatisticsSyncOffset = 0;
+
+      // Segna ogni tentativo: i record non disponibili o falliti vengono riprovati dopo 7 giorni.
+      const attemptedAt = new Date().toISOString();
+      const { error: markError } = await supabase
+        .from("matches")
+        .update({ statistics_sync_attempted_at: attemptedAt })
+        .in("id", ids);
+      if (markError) throw markError;
     }
   } catch (error) {
     report.errors.push({ error: error.message });
