@@ -1350,9 +1350,17 @@ async function buildHistoricalStatForecast(fixture, history) {
     }
     counts[field] = { home: samples[field].home.length, away: samples[field].away.length };
     if (countMarkets.includes(field)) {
+      // Evita probabilità di mercati volume basate su campioni troppo piccoli.
+      // Per home/away serve il campione del lato; per total servono entrambi.
+      const MIN_STAT_SAMPLES = 5;
       for (const side of ["home", "away", "total"]) {
+        const enoughSamples = side === "total"
+          ? counts[field].home >= MIN_STAT_SAMPLES && counts[field].away >= MIN_STAT_SAMPLES
+          : counts[field][side] >= MIN_STAT_SAMPLES;
         const lambda = averages[field][side];
-        if (lambda !== null) Object.assign(probabilities, countMarketProbabilities(lambda, field + "_" + side));
+        if (enoughSamples && lambda !== null) {
+          Object.assign(probabilities, countMarketProbabilities(lambda, field + "_" + side));
+        }
       }
     }
   }
@@ -1363,7 +1371,8 @@ async function buildHistoricalStatForecast(fixture, history) {
     samples: counts,
     weighted_averages: averages,
     probabilities,
-    note: "Statistiche assenti restano null; stime dei mercati di volume solo con campioni disponibili."
+    minimum_samples_per_team_for_volume_markets: 5,
+    note: "Statistiche assenti restano null; i mercati di volume sono generati solo con almeno 5 osservazioni valide per ciascuna squadra (per i mercati total) o per il lato richiesto."
   };
 }
 
