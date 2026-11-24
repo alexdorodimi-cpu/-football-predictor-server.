@@ -1628,7 +1628,9 @@ app.post(
         `/date/${encodeURIComponent(date)}`
       );
 
-      const matches = getMatches(body);
+      const europeanLeagues = await getEuropeanLeagueCatalog();
+      const europeanIds = new Set(europeanLeagues.map(item => String(item.id)));
+      const matches = getMatches(body).filter(match => europeanIds.has(getMatchLeagueId(match)));
 
       const season = String(
         req.query.season || date.slice(0, 4)
@@ -1710,7 +1712,9 @@ app.post(
           `/date/${encodeURIComponent(date)}`
         );
 
-        const matches = getMatches(body);
+        const europeanLeagues = await getEuropeanLeagueCatalog();
+        const europeanIds = new Set(europeanLeagues.map(item => String(item.id)));
+        const matches = getMatches(body).filter(match => europeanIds.has(getMatchLeagueId(match)));
 
         received += matches.length;
 
@@ -2748,6 +2752,11 @@ app.get(
           ok: false,
           error: "ID campionato non valido."
         });
+      }
+
+      const allowedLeagues = await getEuropeanLeagueCatalog();
+      if (!allowedLeagues.some(item => String(item.id) === leagueId)) {
+        return res.status(404).json({ ok: false, error: "Backtest consentito solo per campionati europei e competizioni UEFA/World Cup incluse." });
       }
 
       const limit = Math.min(
@@ -4074,9 +4083,13 @@ app.get(
         10
       );
 
+      const europeanLeagues = await getEuropeanLeagueCatalog();
+      const europeanIds = europeanLeagues.map(item => String(item.id));
+      if (!europeanIds.length) throw new Error("Nessun campionato europeo disponibile nel catalogo PitchAPI.");
       const { data: fixtures, error } = await supabase
         .from("matches")
         .select("*")
+        .in("league_id", europeanIds)
         .gte("match_date", `${date}T00:00:00`)
         .lt("match_date", `${date}T23:59:59.999`)
         .order("match_date", { ascending: true });
