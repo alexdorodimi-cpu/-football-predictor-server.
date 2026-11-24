@@ -3872,9 +3872,19 @@ async function runAutomaticResultsSync() {
     for (const [leagueId, season] of latestSeasonByLeague.entries()) {
       report.leagues_checked++;
       try {
-        const body = await sportGet(
-          `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=played`
-        );
+        let body;
+        try {
+          body = await sportGet(
+            `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(season)}&status=played`
+          );
+        } catch (primaryError) {
+          // Alcuni campionati accettano l'anno iniziale (2026) invece della forma 2026/2027.
+          const startYear = String(season).match(/^(\\d{4})\\/\\d{4}$/)?.[1];
+          if (!startYear || !/invalid season year/i.test(primaryError.message || "")) throw primaryError;
+          body = await sportGet(
+            `/leagues/${encodeURIComponent(leagueId)}/matches?season=${encodeURIComponent(startYear)}&status=played`
+          );
+        }
         const matches = getMatches(body);
         const saved = await saveMatchesToDatabase(matches, season, leagueId);
         report.matches_received += matches.length;
