@@ -4053,6 +4053,30 @@ async function runAutomaticStatisticsSync() {
   return report;
 }
 
+// Avvio manuale protetto: utile anche su hosting che sospende il processo.
+app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req, res) => {
+  if (automaticResultsSyncRunning || automaticStatisticsSyncRunning) {
+    return res.status(409).json({
+      ok: false,
+      running: true,
+      message: "Una sincronizzazione è già in corso. Controlla /api/sync/automatic/status."
+    });
+  }
+
+  try {
+    const results = await runAutomaticResultsSync();
+    const statistics = await runAutomaticStatisticsSync();
+    res.json({
+      ok: true,
+      triggered_manually: true,
+      results_report: results || automaticResultsSyncLastReport,
+      statistics_report: statistics || automaticStatisticsSyncLastReport
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
 // Render puo' sospendere i servizi gratuiti inattivi: il job parte all'avvio
 // e poi ogni 12 ore mentre il processo rimane attivo.
 const AUTOMATIC_RESULTS_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
