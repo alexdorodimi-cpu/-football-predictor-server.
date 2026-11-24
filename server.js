@@ -3994,8 +3994,13 @@ app.listen(PORT, () => {
   setInterval(() => {
     runAutomaticResultsSync().catch(error =>
       console.error("Sync periodica non riuscita:", error.message)
-    ).finally(() => runAutomaticStatisticsSync().catch(error =>
-      console.error("Backfill statistiche periodico non riuscito:", error.message)
-    ));
+    );
   }, AUTOMATIC_RESULTS_SYNC_INTERVAL_MS);
+  // Le statistiche vengono recuperate più spesso, a piccoli blocchi, per completare
+  // progressivamente lo storico senza lanciare migliaia di richieste tutte insieme.
+  setInterval(() => {
+    runAutomaticStatisticsSync().catch(error =>
+      console.error("Backfill statistiche periodico non riuscito:", error.message)
+    );
+  }, 60 * 60 * 1000);
 });
