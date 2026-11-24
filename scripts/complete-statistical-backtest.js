@@ -109,7 +109,7 @@ async function main() {
       ? Number((Math.max(row.positiveActual, row.negativeActual) / row.evaluated * 100).toFixed(2))
       : null,
     beats_majority_baseline: row.tp + row.fn > 0 && row.tn + row.fp > 0
-      ? ((row.tp / (row.tp + row.fn)) + (row.tn / (row.tn + row.fp))) / 2 > 0.5
+      ? row.correct / row.evaluated > Math.max(row.positiveActual, row.negativeActual) / row.evaluated
       : false,
     brier_score: row.evaluated ? Number((row.brierSum / row.evaluated).toFixed(4)) : null
   }]));
