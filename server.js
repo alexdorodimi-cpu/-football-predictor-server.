@@ -3686,10 +3686,16 @@ async function runLeagueNameRepair() {
       }
       for (const [name, ids] of grouped) {
         for (let i = 0; i < ids.length; i += 100) {
-          const { error: updateError } = await supabase.from("matches")
-            .update({ league_name: name }).in("id", ids.slice(i, i + 100));
+          const batchIds = ids.slice(i, i + 100);
+          const { data: updatedRows, error: updateError } = await supabase.from("matches")
+            .update({ league_name: name }).in("id", batchIds).select("id");
           if (updateError) throw updateError;
-          leagueNameRepairJob.rows_updated += Math.min(100, ids.length - i);
+          const actualUpdated = (updatedRows || []).length;
+          if (actualUpdated !== batchIds.length) {
+            throw new Error("Aggiornamento incompleto: richieste " + batchIds.length +
+              " righe, confermate " + actualUpdated + " per il campionato " + name + ".");
+          }
+          leagueNameRepairJob.rows_updated += actualUpdated;
         }
       }
       // Checkpoint solo dopo aver salvato tutte le modifiche della pagina:
@@ -3743,8 +3749,19 @@ app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async
     if (leagueNameRepairJob.running) {
       return res.json({ ok: true, already_running: true, ...leagueNameRepairJob });
     }
-    if (persisted?.status === "completed") {
+    const forceRestart = String(req.query.force || "false").toLowerCase() === "true";
+    if (persisted?.status === "completed" && !forceRestart) {
       return res.json({ ok: true, already_completed: true, ...leagueNameRepairJob });
+    }
+    // force=true avvia un nuovo controllo completo, utile dopo un audit indipendente.
+    // Le righe già corrette vengono saltate; ogni update viene verificato con SELECT.
+    if (forceRestart) {
+      Object.assign(leagueNameRepairJob, {
+        running: false, started_at: null, finished_at: null, error: null,
+        scanned: 0, rows_updated: 0, unchanged: 0, missing_names: 0,
+        conflicting_names: 0, unmapped_league_ids: 0, cursor: null,
+        total_batches: 0, batch_size: 1000, status: "idle"
+      });
     }
     // Riprende da cursor e contatori persistiti. Se nessun checkpoint esiste,
     // parte dall'inizio; le righe già corrette vengono riconosciute come invariate.
@@ -3752,7 +3769,8 @@ app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async
     return res.status(202).json({
       ok: true,
       started: true,
-      resumed: Boolean(persisted?.cursor),
+      forced: forceRestart,
+      resumed: !forceRestart && Boolean(persisted?.cursor),
       message: "Aggiornamento avviato o ripreso in background. Controllare action=status.",
       cursor: leagueNameRepairJob.cursor,
       batch_size: leagueNameRepairJob.batch_size
