@@ -3128,6 +3128,9 @@ app.get(
         });
       }
 
+      // Inizializza prima l'oggetto usato da advancedMetrics; viene popolato più sotto.
+      const outcomeMetrics = {};
+
       const advancedMetrics = {
         "1X2": {
           log_loss: evaluated ? Number((totalLogLoss / evaluated).toFixed(4)) : null,
@@ -3364,7 +3367,6 @@ app.get(
         "btts_yes", "btts_no"
       ];
       // Metriche 1/X/2 separate: accuracy = recall della singola classe.
-      const outcomeMetrics = {};
       for (const outcome of ["1", "X", "2"]) {
         const tp = results.filter(result => result.actual_result === outcome && result.predicted_result === outcome).length;
         const fp = results.filter(result => result.actual_result !== outcome && result.predicted_result === outcome).length;
