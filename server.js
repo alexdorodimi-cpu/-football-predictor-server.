@@ -518,11 +518,14 @@ function normalizeFixture(match, seasonOverride, leagueIdOverride) {
 
     league_id: String(leagueId ?? "unknown"),
 
+    // Non inviare null quando PitchAPI omette il nome: negli upsert
+    // su una partita esistente null cancellerebbe il valore già corretto.
+    // undefined viene omesso dal payload e conserva il dato presente.
     league_name:
       match.league_name ||
       match.league?.name ||
       match.competition?.name ||
-      null,
+      undefined,
 
     season: String(season || ""),
 
