@@ -2348,7 +2348,8 @@ async function runBulkBacktestJob(job) {
       const url = new URL(`/api/backtest/${encodeURIComponent(job.leagueId)}`, baseUrl);
       url.searchParams.set("limit", String(job.batchSize));
       url.searchParams.set("offset", String(offset));
-      url.searchParams.set("season", job.season);
+      if (job.allSeasons) url.searchParams.set("all_seasons", "true");
+      else url.searchParams.set("season", job.season);
       url.searchParams.set("include_stats", "true");
       url.searchParams.set("stats_limit", String(job.batchSize));
       url.searchParams.set("summary", "true");
@@ -2397,7 +2398,8 @@ async function runBulkBacktestJob(job) {
     job.result = {
       ok: true,
       league_id: job.leagueId,
-      season: job.season,
+      season: job.allSeasons ? "ALL" : job.season,
+      all_seasons: job.allSeasons,
       requested_matches_max: job.maxMatches,
       batch_size: job.batchSize,
       blocks_completed: job.blocks.length,
@@ -2426,14 +2428,15 @@ app.post("/api/backtest/bulk/start/:leagueId", requireDatabase, (req, res) => {
   if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
     return res.status(400).json({ ok: false, error: "ID campionato non valido." });
   }
-  const season = String(req.query.season || "2026/2027");
-  if (!/^\d{4}\/\d{4}$/.test(season)) {
+  const allSeasons = String(req.query.all_seasons || "").toLowerCase() === "true";
+  const season = allSeasons ? "ALL" : String(req.query.season || "2026/2027");
+  if (!allSeasons && !/^\d{4}\/\d{4}$/.test(season)) {
     return res.status(400).json({ ok: false, error: "Stagione non valida. Usa YYYY/YYYY." });
   }
   const maxMatches = Math.min(1000, Math.max(1, Number.parseInt(req.query.matches || "1000", 10) || 1000));
   const batchSize = Math.min(20, Math.max(5, Number.parseInt(req.query.batch_size || "20", 10) || 20));
   const active = [...bulkBacktestJobs.values()].find(job =>
-    job.status === "running" && job.leagueId === leagueId && job.season === season
+    job.status === "running" && job.leagueId === leagueId && job.season === season && job.allSeasons === allSeasons
   );
   if (active) {
     return res.status(202).json({
@@ -2444,7 +2447,7 @@ app.post("/api/backtest/bulk/start/:leagueId", requireDatabase, (req, res) => {
   }
   const id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   const job = {
-    id, leagueId, season, maxMatches, batchSize, status: "running",
+    id, leagueId, season, allSeasons, maxMatches, batchSize, status: "running",
     blocks: [], completedBlocks: 0, completedMatches: 0, nextOffset: 0,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     result: null, error: null
@@ -2456,7 +2459,7 @@ app.post("/api/backtest/bulk/start/:leagueId", requireDatabase, (req, res) => {
     job_id: id, status_url: `/api/backtest/bulk/${id}`,
     result_url: `/api/backtest/bulk/${id}/result`,
     expected_blocks: Math.ceil(maxMatches / batchSize),
-    batch_size: batchSize, requested_matches: maxMatches
+    batch_size: batchSize, requested_matches: maxMatches, all_seasons: allSeasons
   });
 });
 
@@ -2578,7 +2581,7 @@ app.get(
         if (!isFinished(match)) return false;
         // La stagione limita il campione di valutazione, non lo storico
         // disponibile al modello per i soli incontri precedenti.
-        if (season && String(match.season || "") !== season) return false;
+        if (!allSeasons && season && String(match.season || "") !== season) return false;
         const day = String(match.match_date || "").slice(0, 10);
         if (targetDate) return day === targetDate;
         if (fromDate && day < fromDate) return false;
@@ -2589,9 +2592,12 @@ app.get(
       const includeStats = String(req.query.include_stats || "").toLowerCase() === "true";
       const statsEvaluationLimit = Math.min(Math.max(Number(req.query.stats_limit) || 20, 1), 300);
       const offset = Math.max(0, Number.parseInt(req.query.offset || "0", 10) || 0);
+      // Multi-season: valuta prima le partite concluse più recenti.
+      // calculatePrediction usa soltanto incontri precedenti alla data prevista.
+      const evaluationPool = allSeasons ? [...dateMatches].reverse() : dateMatches;
       const evaluationMatches = includeStats
-        ? dateMatches.slice(offset, offset + Math.min(limit, statsEvaluationLimit))
-        : dateMatches.slice(-limit);
+        ? evaluationPool.slice(offset, offset + Math.min(limit, statsEvaluationLimit))
+        : evaluationPool.slice(-limit);
       const results = [];
       const statisticalMarketRows = {};
 
@@ -3077,6 +3083,7 @@ app.get(
         from_date: fromDate,
         to_date: toDate,
         requested_matches: limit,
+        all_seasons: allSeasons,
         offset: includeStats ? offset : null,
         available_history_matches: history.length,
         matches_on_target_date: dateMatches.length,
@@ -3282,6 +3289,7 @@ app.get(
         ? String(req.query.league).trim()
         : null;
 
+      const allSeasons = String(req.query.all_seasons || "").toLowerCase() === "true";
       const season = req.query.season
         ? String(req.query.season).trim()
         : null;
