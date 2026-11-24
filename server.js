@@ -4435,19 +4435,44 @@ async function runAutomaticStatisticsSync() {
   automaticStatisticsSyncRunning = true;
   const report = { started_at: new Date().toISOString(), matches_scanned: 0, statistics_saved: 0, already_present: 0, failed: 0, errors: [] };
   try {
+    const now = new Date();
+    const twoYearsAgo = new Date(now);
+    twoYearsAgo.setUTCFullYear(twoYearsAgo.getUTCFullYear() - 2);
     const retryBefore = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: matches, error: matchesError } = await supabase
+    const currentSeason = now.getUTCMonth() >= 6
+      ? `${now.getUTCFullYear()}/${now.getUTCFullYear() + 1}`
+      : `${now.getUTCFullYear() - 1}/${now.getUTCFullYear()}`;
+    const baseQuery = () => supabase
       .from("matches")
-      .select("id,league_id,match_date")
+      .select("id,league_id,season,match_date")
       .not("home_goals", "is", null)
       .not("away_goals", "is", null)
       .not("match_date", "is", null)
-      .lte("match_date", new Date().toISOString())
+      .gte("match_date", twoYearsAgo.toISOString())
+      .lte("match_date", now.toISOString())
       .or("statistics_sync_attempted_at.is.null,statistics_sync_attempted_at.lt." + retryBefore)
-      .order("match_date", { ascending: true })
-      .order("id", { ascending: true })
-      .limit(100);
-    if (matchesError) throw matchesError;
+      .order("match_date", { ascending: false })
+      .order("id", { ascending: true });
+
+    // Priorità: Serie A della stagione corrente, altri campionati correnti,
+    // poi stagioni precedenti. Tutte le gare restano nel limite rolling di 2 anni.
+    const priorityQueries = [
+      baseQuery().eq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
+      baseQuery().neq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
+      baseQuery().neq("season", currentSeason).limit(100)
+    ];
+    const selectedById = new Map();
+    for (const query of priorityQueries) {
+      if (selectedById.size >= 100) break;
+      const { data, error } = await query;
+      if (error) throw error;
+      for (const match of data || []) {
+        if (!selectedById.has(String(match.id)) && selectedById.size < 100) {
+          selectedById.set(String(match.id), match);
+        }
+      }
+    }
+    const matches = Array.from(selectedById.values());
 
     const scanned = matches || [];
     report.matches_scanned = scanned.length;
