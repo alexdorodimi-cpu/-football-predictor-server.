@@ -328,13 +328,15 @@ function isEuropeanLeague(league) {
    /champions league|uefa champions|europa league|conference league|uefa conference|world cup|fifa world cup|european championship|uefa euro/i.test(name);
  return isEuropeanCountry || internationalCompetition;
 }
-async function getEuropeanLeagueCatalog() {
+async function getLeagueCatalog() {
  const body = await sportGet("/leagues");
- const leagues = Array.isArray(body?.data?.leagues) ? body.data.leagues
+ return Array.isArray(body?.data?.leagues) ? body.data.leagues
    : Array.isArray(body?.leagues) ? body.leagues
    : Array.isArray(body?.data) ? body.data
    : getMatches(body);
- return leagues.filter(isEuropeanLeague);
+}
+async function getEuropeanLeagueCatalog() {
+ return (await getLeagueCatalog()).filter(isEuropeanLeague);
 }
 function getMatchLeagueId(match) {
  return String(match?.league_id??match?.league?.id??match?.competition?.id??"");
@@ -3595,9 +3597,76 @@ app.get(
   }
 );
 
+// Riconcilia i nomi dei campionati usando league_id -> catalogo PitchAPI.
+// La modalità predefinita è sola lettura; apply=true applica gli aggiornamenti.
+app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async (req, res) => {
+  try {
+    const apply = String(req.query.apply || "false").toLowerCase() === "true";
+    const catalog = await getLeagueCatalog();
+    const namesById = new Map(
+      catalog.filter(item => item && item.id && item.name)
+        .map(item => [String(item.id), String(item.name)])
+    );
+    const pageSize = 1000;
+    let offset = 0;
+    let scanned = 0;
+    let missingNames = 0;
+    let conflictingNames = 0;
+    let unchanged = 0;
+    let updated = 0;
+    let unmapped = 0;
+    const changes = [];
+    while (true) {
+      const { data, error } = await supabase.from("matches")
+        .select("id,league_id,league_name")
+        .order("match_date", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw error;
+      const page = data || [];
+      scanned += page.length;
+      const grouped = new Map();
+      for (const row of page) {
+        const authoritativeName = namesById.get(String(row.league_id || ""));
+        if (!authoritativeName) { unmapped++; continue; }
+        if (String(row.league_name || "").trim() === authoritativeName) {
+          unchanged++; continue;
+        }
+        if (!row.league_name) missingNames++;
+        else conflictingNames++;
+        if (!grouped.has(authoritativeName)) grouped.set(authoritativeName, []);
+        grouped.get(authoritativeName).push(String(row.id));
+        if (changes.length < 30) changes.push({
+          match_id: String(row.id), league_id: String(row.league_id),
+          old_name: row.league_name || null, catalog_name: authoritativeName
+        });
+      }
+      if (apply) {
+        for (const [leagueName, ids] of grouped) {
+          for (let i = 0; i < ids.length; i += 200) {
+            const batch = ids.slice(i, i + 200);
+            const { error: updateError } = await supabase.from("matches")
+              .update({ league_name: leagueName }).in("id", batch);
+            if (updateError) throw updateError;
+            updated += batch.length;
+          }
+        }
+      }
+      if (page.length < pageSize) break;
+      offset += page.length;
+    }
+    res.json({
+      ok: true, mode: apply ? "applied" : "dry_run",
+      scanned, missing_names: missingNames, conflicting_names: conflictingNames,
+      unchanged, unmapped_league_ids: unmapped, rows_updated: updated,
+      catalog_leagues: namesById.size, sample_changes: changes,
+      note: "I nomi sono ricavati esclusivamente dal catalogo PitchAPI tramite league_id; gli ID delle partite e i risultati non vengono modificati."
+    });
+  } catch (error) { handleError(res, error); }
+});
+
 // Report giornaliero CSV delle previsioni. Senza quote affidabili non
 // calcola value/ROI e segnala esplicitamente "nessuna giocata".
-app.get("/api/reports/daily.csv", requireDatabase, async (req, res) => {
+app.get("/api/reports/daily.csv", requireSportApi, requireDatabase, async (req, res) => {
   try {
     const date = String(req.query.date || new Date().toISOString().slice(0, 10));
     const leagueId = req.query.league_id ? String(req.query.league_id) : null;
@@ -3617,6 +3686,9 @@ app.get("/api/reports/daily.csv", requireDatabase, async (req, res) => {
     if (leagueId) query = query.eq("league_id", leagueId);
     const { data: fixtures, error } = await query;
     if (error) throw error;
+    const catalog = await getLeagueCatalog();
+    const leagueNamesById = new Map(catalog.filter(item => item?.id && item?.name)
+      .map(item => [String(item.id), String(item.name)]));
     const historyByLeague = new Map();
     const csvRows = [];
     for (const fixture of fixtures || []) {
@@ -3629,7 +3701,7 @@ app.get("/api/reports/daily.csv", requireDatabase, async (req, res) => {
       if (!prediction?.ok || !prediction.probabilities) continue;
       const p = prediction.probabilities;
       const fields = [
-        date, fixture.match_date, fixture.league_name || "", fixture.season || "",
+        date, fixture.match_date, leagueNamesById.get(String(fixture.league_id)) || fixture.league_name || "", fixture.season || "",
         fixture.id, fixture.home_team, fixture.away_team,
         p["1"], p["X"], p["2"], p.over_1_5, p.under_1_5,
         p.over_2_5, p.under_2_5, p.over_3_5, p.under_3_5,
