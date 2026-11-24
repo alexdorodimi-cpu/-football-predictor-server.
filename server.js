@@ -2261,31 +2261,49 @@ async function getCoachChangeImpact(fixture, history) {
       }
       return normalizeCoachTeamName(match.home_team) === teamName ||
         normalizeCoachTeamName(match.away_team) === teamName;
-    }).sort((a,b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date)).slice(0, 8);
+    }).sort((a,b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date)).slice(0, 30);
     tasks.push({ side, teamMatches });
   }
 
   const teamResults = await Promise.all(tasks.map(async ({side, teamMatches}) => {
-    const observations = await mapWithConcurrency(teamMatches, 3, async match => {
-      try {
-        const lineup = await getCachedCoachLineup(match.id);
-        const homeId = match.home_team_id || getHomeId(match);
-        const isHome = side.id && homeId
-          ? String(homeId) === String(side.id)
-          : normalizeCoachTeamName(match.home_team) === normalizeCoachTeamName(side.name);
-        const teamLineup = isHome ? lineup?.home : lineup?.away;
-        const coach = teamLineup?.coach?.name || teamLineup?.coach || null;
-        if (!coach || getNumber(match.home_goals) === null || getNumber(match.away_goals) === null) return null;
-        const scored = Number(isHome ? match.home_goals : match.away_goals);
-        const conceded = Number(isHome ? match.away_goals : match.home_goals);
-        return { coach: String(coach).trim(), scored, conceded, date: match.match_date || match.date };
-      } catch (error) {
-        return null;
+    // Scansione progressiva delle ultime 30 gare: si interrompe appena
+    // abbiamo almeno 3 osservazioni col tecnico più recente e 2 precedenti.
+    // Le richieste sono in piccoli blocchi per limitare carico e latenza.
+    const valid = [];
+    let currentCoach = null;
+    let scanned = 0;
+    for (let offset = 0; offset < teamMatches.length; offset += 4) {
+      const batch = teamMatches.slice(offset, offset + 4);
+      scanned += batch.length;
+      const observations = await mapWithConcurrency(batch, 4, async match => {
+        try {
+          const lineup = await getCachedCoachLineup(match.id);
+          const homeId = match.home_team_id || getHomeId(match);
+          const isHome = side.id && homeId
+            ? String(homeId) === String(side.id)
+            : normalizeCoachTeamName(match.home_team) === normalizeCoachTeamName(side.name);
+          const teamLineup = isHome ? lineup?.home : lineup?.away;
+          const coach = teamLineup?.coach?.name || teamLineup?.coach || null;
+          if (!coach || getNumber(match.home_goals) === null || getNumber(match.away_goals) === null) return null;
+          const scored = Number(isHome ? match.home_goals : match.away_goals);
+          const conceded = Number(isHome ? match.away_goals : match.home_goals);
+          return { coach: String(coach).trim(), scored, conceded, date: match.match_date || match.date };
+        } catch (error) {
+          return null;
+        }
+      });
+      valid.push(...observations.filter(Boolean));
+      valid.sort((a,b) => new Date(b.date)-new Date(a.date));
+      if (!currentCoach && valid.length) currentCoach = valid[0].coach;
+      if (currentCoach) {
+        const currentCount = valid.filter(item => item.coach.toLowerCase() === currentCoach.toLowerCase()).length;
+        const previousCount = valid.length - currentCount;
+        if (currentCount >= 3 && previousCount >= 2) break;
       }
-    });
-    const valid = observations.filter(Boolean).sort((a,b) => new Date(b.date)-new Date(a.date));
-    if (!valid.length) return { team: side.name, applied:false, reason:"Nessun allenatore rilevato nelle formazioni storiche." };
-    const currentCoach = valid[0].coach;
+    }
+    if (!valid.length) return { team: side.name, applied:false, history_matches_scanned: scanned, coach_observations: 0,
+      reason:"Nessun allenatore rilevato nelle formazioni storiche." };
+    currentCoach = valid[0].coach;
     const current = valid.filter(item => item.coach.toLowerCase() === currentCoach.toLowerCase());
     const previous = valid.filter(item => item.coach.toLowerCase() !== currentCoach.toLowerCase());
     const avgDiff = rows => rows.length ? rows.reduce((sum,item)=>sum+item.scored-item.conceded,0)/rows.length : null;
@@ -2293,14 +2311,17 @@ async function getCoachChangeImpact(fixture, history) {
     const previousDiff = avgDiff(previous);
     if (current.length < 3 || previous.length < 2 || previousDiff === null) {
       return { team: side.name, coach: currentCoach, matches_under_current_coach: current.length,
-        matches_under_previous_coaches: previous.length, applied:false,
-        reason:"Servono almeno 3 partite con l'allenatore attuale e 2 con i precedenti." };
+        matches_under_previous_coaches: previous.length, history_matches_scanned: scanned,
+        coach_observations: valid.length, applied:false,
+        reason:"Campione insufficiente anche dopo la scansione estesa: servono almeno 3 partite con l'allenatore attuale e 2 con i precedenti." };
     }
     const delta = currentDiff - previousDiff;
     const adjustment = Math.max(-0.03, Math.min(0.03, delta * 0.015));
     return {
       team: side.name, coach: currentCoach, matches_under_current_coach: current.length,
       matches_under_previous_coaches: previous.length,
+      history_matches_scanned: scanned,
+      coach_observations: valid.length,
       goal_difference_per_match_current: Number(currentDiff.toFixed(3)),
       goal_difference_per_match_previous: Number(previousDiff.toFixed(3)),
       observed_change: Number(delta.toFixed(3)),
