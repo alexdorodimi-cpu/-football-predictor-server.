@@ -3597,84 +3597,102 @@ app.get(
   }
 );
 
-// Riconcilia i nomi dei campionati usando league_id -> catalogo PitchAPI.
-// Dry-run completo per impostazione predefinita. apply=true lavora a blocchi
-// piccoli e riprendibili: passare next_cursor come cursor nella chiamata successiva.
-app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async (req, res) => {
+// Riconciliazione nomi campionati in un'unica esecuzione asincrona.
+// La richiesta di avvio torna subito; il progresso si legge dall'endpoint /status.
+// Se il processo Render si riavvia, la procedura può essere rilanciata: è idempotente.
+const leagueNameRepairJob = {
+  running: false, started_at: null, finished_at: null, error: null,
+  scanned: 0, rows_updated: 0, unchanged: 0, missing_names: 0,
+  conflicting_names: 0, unmapped_league_ids: 0, cursor: null,
+  total_batches: 0, batch_size: 1000
+};
+
+async function runLeagueNameRepair() {
+  leagueNameRepairJob.running = true;
+  leagueNameRepairJob.started_at = new Date().toISOString();
+  leagueNameRepairJob.finished_at = null;
+  leagueNameRepairJob.error = null;
+  leagueNameRepairJob.scanned = 0;
+  leagueNameRepairJob.rows_updated = 0;
+  leagueNameRepairJob.unchanged = 0;
+  leagueNameRepairJob.missing_names = 0;
+  leagueNameRepairJob.conflicting_names = 0;
+  leagueNameRepairJob.unmapped_league_ids = 0;
+  leagueNameRepairJob.cursor = null;
+  leagueNameRepairJob.total_batches = 0;
   try {
-    const apply = String(req.query.apply || "false").toLowerCase() === "true";
     const catalog = await getLeagueCatalog();
-    const namesById = new Map(
-      catalog.filter(item => item && item.id && item.name)
-        .map(item => [String(item.id), String(item.name)])
-    );
-    const pageSize = apply
-      ? Math.max(1, Math.min(500, Number.parseInt(req.query.limit || "250", 10) || 250))
-      : 1000;
-    const cursor = req.query.cursor ? String(req.query.cursor) : null;
-    let query = supabase.from("matches")
-      .select("id,league_id,league_name")
-      .order("id", { ascending: true })
-      .limit(pageSize);
-    if (cursor) query = query.gt("id", cursor);
-    const { data, error } = await query;
-    if (error) throw error;
-    const page = data || [];
-    let missingNames = 0;
-    let conflictingNames = 0;
-    let unchanged = 0;
-    let updated = 0;
-    let unmapped = 0;
-    const grouped = new Map();
-    const changes = [];
-    for (const row of page) {
-      const authoritativeName = namesById.get(String(row.league_id || ""));
-      if (!authoritativeName) { unmapped++; continue; }
-      if (String(row.league_name || "").trim() === authoritativeName) {
-        unchanged++;
-        continue;
+    const namesById = new Map(catalog.filter(item => item?.id && item?.name)
+      .map(item => [String(item.id), String(item.name)]));
+    const pageSize = leagueNameRepairJob.batch_size;
+    while (true) {
+      let query = supabase.from("matches")
+        .select("id,league_id,league_name")
+        .order("id", { ascending: true }).limit(pageSize);
+      if (leagueNameRepairJob.cursor) query = query.gt("id", leagueNameRepairJob.cursor);
+      const { data, error } = await query;
+      if (error) throw error;
+      const page = data || [];
+      if (!page.length) break;
+      const grouped = new Map();
+      for (const row of page) {
+        const name = namesById.get(String(row.league_id || ""));
+        if (!name) { leagueNameRepairJob.unmapped_league_ids++; continue; }
+        if (String(row.league_name || "").trim() === name) {
+          leagueNameRepairJob.unchanged++;
+          continue;
+        }
+        if (!row.league_name) leagueNameRepairJob.missing_names++;
+        else leagueNameRepairJob.conflicting_names++;
+        if (!grouped.has(name)) grouped.set(name, []);
+        grouped.get(name).push(String(row.id));
       }
-      if (!row.league_name) missingNames++;
-      else conflictingNames++;
-      if (!grouped.has(authoritativeName)) grouped.set(authoritativeName, []);
-      grouped.get(authoritativeName).push(String(row.id));
-      if (changes.length < 30) changes.push({
-        match_id: String(row.id), league_id: String(row.league_id),
-        old_name: row.league_name || null, catalog_name: authoritativeName
-      });
-    }
-    if (apply) {
-      for (const [leagueName, ids] of grouped) {
+      for (const [name, ids] of grouped) {
         for (let i = 0; i < ids.length; i += 100) {
-          const batch = ids.slice(i, i + 100);
           const { error: updateError } = await supabase.from("matches")
-            .update({ league_name: leagueName }).in("id", batch);
+            .update({ league_name: name }).in("id", ids.slice(i, i + 100));
           if (updateError) throw updateError;
-          updated += batch.length;
+          leagueNameRepairJob.rows_updated += Math.min(100, ids.length - i);
         }
       }
+      leagueNameRepairJob.scanned += page.length;
+      leagueNameRepairJob.total_batches++;
+      leagueNameRepairJob.cursor = String(page[page.length - 1].id);
+      if (page.length < pageSize) break;
     }
-    const hasMore = apply && page.length === pageSize;
-    res.json({
-      ok: true,
-      mode: apply ? "applied_batch" : "dry_run",
-      cursor_in: cursor,
-      next_cursor: hasMore ? String(page[page.length - 1].id) : null,
-      has_more: hasMore,
-      batch_size: page.length,
-      scanned: page.length,
-      missing_names: missingNames,
-      conflicting_names: conflictingNames,
-      unchanged,
-      unmapped_league_ids: unmapped,
-      rows_updated: updated,
-      catalog_leagues: namesById.size,
-      sample_changes: changes,
-      note: apply
-        ? "Blocco completato. Se has_more=true, ripeti la stessa richiesta con cursor=next_cursor. L'operazione è idempotente e aggiorna solo league_name."
-        : "Dry-run sul primo blocco ordinato per ID; nessuna riga modificata. Per applicare usare apply=true e proseguire con next_cursor."
+  } catch (error) {
+    leagueNameRepairJob.error = String(error?.message || error);
+  } finally {
+    leagueNameRepairJob.running = false;
+    leagueNameRepairJob.finished_at = new Date().toISOString();
+  }
+}
+
+app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, (req, res) => {
+  const action = String(req.query.action || "").toLowerCase();
+  if (action === "status") {
+    return res.json({ ok: !leagueNameRepairJob.error, ...leagueNameRepairJob });
+  }
+  const apply = String(req.query.apply || "false").toLowerCase() === "true";
+  if (!apply) {
+    return res.status(400).json({
+      ok: false,
+      error: "Per avviare l'aggiornamento completo usa apply=true. Per controllare lo stato usa action=status."
     });
-  } catch (error) { handleError(res, error); }
+  }
+  if (leagueNameRepairJob.running) {
+    return res.json({ ok: true, already_running: true, ...leagueNameRepairJob });
+  }
+  // Se già completato, non ripetere inutilmente il lavoro.
+  if (leagueNameRepairJob.finished_at && !leagueNameRepairJob.error) {
+    return res.json({ ok: true, already_completed: true, ...leagueNameRepairJob });
+  }
+  runLeagueNameRepair();
+  return res.status(202).json({
+    ok: true, started: true,
+    message: "Aggiornamento avviato in background. Non richiamare apply=true; controllare action=status.",
+    batch_size: leagueNameRepairJob.batch_size
+  });
 });
 
 // Report giornaliero CSV delle previsioni. Senza quote affidabili non
