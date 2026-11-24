@@ -158,8 +158,15 @@ async function main() {
     const baselineAccuracy = testRows.length ? Number((baselineCorrect / testRows.length * 100).toFixed(2)) : null;
     const enoughTraining = trainRows.length >= Math.max(20, Math.floor(minimumEvaluated * 0.5));
     const enoughHoldout = testRows.length >= Math.max(10, Math.floor(minimumEvaluated * 0.2));
-    const approvedForReview = enoughTraining && enoughHoldout && holdoutBalancedAccuracy !== null &&
-      holdoutBalancedAccuracy >= 50 && holdoutAccuracy >= targetAccuracy;
+    // Un candidato non è approvabile solo perché supera una soglia assoluta:
+    // deve anche battere la classificazione base al 50% sullo stesso holdout.
+    // Così evitiamo di promuovere soglie che peggiorano il modello nonostante
+    // una percentuale grezza apparentemente alta.
+    const beatsBaseline = holdoutAccuracy !== null && baselineAccuracy !== null &&
+      holdoutAccuracy > baselineAccuracy;
+    const approvedForReview = enoughTraining && enoughHoldout &&
+      holdoutBalancedAccuracy !== null && holdoutBalancedAccuracy > 50 &&
+      holdoutAccuracy >= targetAccuracy && beatsBaseline;
 
     thresholdOptimization[market.name] = {
       selected_threshold_percent: Number((best.threshold * 100).toFixed(0)),
@@ -170,6 +177,7 @@ async function main() {
       holdout_accuracy: holdoutAccuracy,
       holdout_balanced_accuracy: holdoutBalancedAccuracy,
       holdout_baseline_50_percent_accuracy: baselineAccuracy,
+      beats_baseline: beatsBaseline,
       candidate_eligible_for_review: approvedForReview,
       applied_to_model: false,
       note: "Configurazione candidata: richiede revisione e validazione su dati futuri; il modello in produzione non viene modificato."
@@ -180,6 +188,7 @@ async function main() {
       holdout_evaluated: testRows.length,
       holdout_accuracy_percent: holdoutAccuracy,
       holdout_balanced_accuracy_percent: holdoutBalancedAccuracy,
+      beats_baseline: beatsBaseline,
       eligible_for_review: approvedForReview
     };
   }
