@@ -2451,14 +2451,16 @@ app.get(
           actual_goals: totalGoals,
           actual_score: `${actual.home}-${actual.away}`,
           actual_markets: {
-            over_1_5: actualOver15,
-            over_2_5: actualOver25,
-            over_3_5: actualOver35,
-            btts_yes: actualBtts,
-            under_0_5: totalGoals === 0,
             over_0_5: totalGoals >= 1,
-            under_4_5: totalGoals <= 4,
-            over_4_5: totalGoals >= 5,
+            under_0_5: totalGoals === 0,
+            over_1_5: actualOver15,
+            under_1_5: totalGoals <= 1,
+            over_2_5: actualOver25,
+            under_2_5: totalGoals <= 2,
+            over_3_5: actualOver35,
+            under_3_5: totalGoals <= 3,
+            btts_yes: actualBtts,
+            btts_no: !actualBtts,
             double_chance_1x: actual.home >= actual.away,
             double_chance_x2: actual.home <= actual.away,
             double_chance_12: actual.home !== actual.away,
@@ -2772,7 +2774,24 @@ app.get(
       }
 
       const poissonMetrics = buildModelMetrics("probabilities");
-      const accuracyByMarket = poissonMetrics;
+      // Backtest principale: soltanto mercati gol, 1X2 e risultati esatti.
+      // Gli altri mercati restano disponibili nelle singole previsioni, ma non
+      // vengono elaborati né restituiti nelle metriche del test principale.
+      const selectedMarketKeys = [
+        "1", "X", "2",
+        "over_0_5", "under_0_5",
+        "over_1_5", "under_1_5",
+        "over_2_5", "under_2_5",
+        "over_3_5", "under_3_5",
+        "btts_yes", "btts_no"
+      ];
+      const accuracyByMarket = Object.fromEntries(
+        selectedMarketKeys.map(key => [key,
+          key === "1" || key === "X" || key === "2"
+            ? poissonMetrics["1X2"]
+            : poissonMetrics[key]
+        ])
+      );
       const statisticalAccuracyByMarket = {};
       for (const [market, tested] of Object.entries(statisticalMarketRows)) {
         if (!tested.length) continue;
