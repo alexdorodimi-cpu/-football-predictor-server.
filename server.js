@@ -4764,7 +4764,7 @@ async function runAutomaticOpenMatchdaySync() {
     if (!response.ok) throw new Error('Indice Open-Matchday HTTP ' + response.status);
     const [indexText, catalog] = await Promise.all([response.text(), getEuropeanLeagueCatalog()]);
     const codes = new Set(['ALB','AND','ARM','AUT','AZE','BEL','BIH','BLR','BUL','CRO','CYP','CZE','DEN','ENG','ESP','EST','FIN','FRA','FRO','GEO','GER','GRE','HUN','IRL','ISL','ISR','ITA','KAZ','KOS','LIE','LTU','LUX','LVA','MDA','MKD','MLT','MNE','NED','NIR','NOR','POL','POR','ROU','RUS','SCO','SMR','SRB','SVK','SVN','SWE','SUI','TUR','UKR','WAL','UEFA']);
-    const rows = indexText.split(/\r?\n/).filter(line => /^\| \`[A-Z0-9_]+\` \|/.test(line));
+    const rows = indexText.split(/\r?\n/).filter(line => /^\| \`[A-Z0-9_-]+\` \|/.test(line));
     report.competitions_seen = rows.length;
     for (const line of rows) {
       const cells = line.split('|').map(value => value.trim());
