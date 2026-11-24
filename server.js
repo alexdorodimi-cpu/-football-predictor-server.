@@ -2776,16 +2776,43 @@ app.get(
       const statisticalAccuracyByMarket = {};
       for (const [market, tested] of Object.entries(statisticalMarketRows)) {
         if (!tested.length) continue;
-        let correctCount = 0, brier = 0;
+        let tp = 0, tn = 0, fp = 0, fn = 0, brier = 0;
         for (const item of tested) {
-          if ((item.probability >= 50) === item.actual) correctCount++;
+          const predicted = item.probability >= 50;
+          if (predicted && item.actual) tp++;
+          else if (!predicted && !item.actual) tn++;
+          else if (predicted && !item.actual) fp++;
+          else fn++;
           brier += Math.pow(item.probability / 100 - (item.actual ? 1 : 0), 2);
         }
+        const evaluated = tested.length;
+        const correctCount = tp + tn;
+        const sensitivity = tp + fn ? tp / (tp + fn) : null;
+        const specificity = tn + fp ? tn / (tn + fp) : null;
+        const balancedAccuracy = sensitivity !== null && specificity !== null
+          ? (sensitivity + specificity) / 2
+          : null;
+        const positiveRate = (tp + fn) / evaluated;
+        const majorityBaseline = Math.max(positiveRate, 1 - positiveRate);
         statisticalAccuracyByMarket[market] = {
-          evaluated: tested.length,
+          evaluated,
           correct: correctCount,
-          accuracy: Number((correctCount / tested.length * 100).toFixed(2)),
-          brier_score: Number((brier / tested.length).toFixed(4))
+          accuracy: Number((correctCount / evaluated * 100).toFixed(2)),
+          positive_actual: tp + fn,
+          negative_actual: tn + fp,
+          predicted_over: tp + fp,
+          predicted_under: tn + fn,
+          true_positive: tp,
+          true_negative: tn,
+          false_positive: fp,
+          false_negative: fn,
+          positive_rate_percent: Number((positiveRate * 100).toFixed(2)),
+          sensitivity_percent: sensitivity === null ? null : Number((sensitivity * 100).toFixed(2)),
+          specificity_percent: specificity === null ? null : Number((specificity * 100).toFixed(2)),
+          balanced_accuracy_percent: balancedAccuracy === null ? null : Number((balancedAccuracy * 100).toFixed(2)),
+          majority_baseline_accuracy_percent: Number((majorityBaseline * 100).toFixed(2)),
+          beats_majority_baseline: balancedAccuracy !== null && balancedAccuracy > 0.5,
+          brier_score: Number((brier / evaluated).toFixed(4))
         };
       }
 
