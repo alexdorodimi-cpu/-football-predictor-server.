@@ -3931,7 +3931,7 @@ async function runAutomaticStatisticsSync() {
       .not("match_date", "is", null)
       .lte("match_date", new Date().toISOString())
       .order("match_date", { ascending: false })
-      .range(automaticStatisticsSyncOffset, automaticStatisticsSyncOffset + 999);
+      .range(automaticStatisticsSyncOffset, automaticStatisticsSyncOffset + 99);
     if (matchesError) throw matchesError;
     const scanned = matches || [];
     report.matches_scanned = scanned.length;
@@ -3943,7 +3943,7 @@ async function runAutomaticStatisticsSync() {
         .from("match_statistics").select("match_id").in("match_id", ids);
       if (existingError) throw existingError;
       const existingIds = new Set((existing || []).map(row => String(row.match_id)));
-      const missing = scanned.filter(match => !existingIds.has(String(match.id))).slice(0, 100);
+      const missing = scanned.filter(match => !existingIds.has(String(match.id)));
       const fetched = await mapWithConcurrency(missing, 5, async match => {
         try {
           const body = await sportGet("/matches/" + encodeURIComponent(match.id) + "/stats");
@@ -3962,9 +3962,9 @@ async function runAutomaticStatisticsSync() {
       const failures = fetched.filter(row => row?.error);
       report.failed = failures.length;
       report.errors = failures.slice(0, 10).map(row => ({ match_id: row.match_id, error: row.error }));
-      // Avanza nel dataset; al termine riparte dall'inizio per intercettare nuove partite.
-      automaticStatisticsSyncOffset += 1000;
-      if (scanned.length < 1000) automaticStatisticsSyncOffset = 0;
+      // Avanza di una pagina; al termine riparte dall'inizio per intercettare nuove partite.
+      automaticStatisticsSyncOffset += scanned.length;
+      if (scanned.length < 100) automaticStatisticsSyncOffset = 0;
     }
   } catch (error) {
     report.errors.push({ error: error.message });
