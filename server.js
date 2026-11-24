@@ -3696,7 +3696,7 @@ app.post("/api/data-sources/open-matchday/sync", requireDatabase, async (req, re
     if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
       return res.status(400).json({ ok: false, error: "league_id PitchAPI non valido." });
     }
-    if (!/^[A-Z]{3}_[A-Z0-9]+_[a-z0-9-]+$/.test(folder)) {
+    if (!/^[A-Z]{3,4}_[A-Z0-9]+_[a-z0-9-]+$/.test(folder)) {
       return res.status(400).json({ ok: false, error: "folder non valido. Usa il nome esatto di una cartella in LEAGUE_INDEX.md." });
     }
     if (season !== "2026/2027") {
