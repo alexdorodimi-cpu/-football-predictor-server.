@@ -3601,8 +3601,10 @@ app.get("/api/reports/daily.csv", requireDatabase, async (req, res) => {
   try {
     const date = String(req.query.date || new Date().toISOString().slice(0, 10));
     const leagueId = req.query.league_id ? String(req.query.league_id) : null;
+    const dateStart = new Date(date + "T00:00:00Z");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-        new Date(date + "T00:00:00Z").toISOString().slice(0, 10) !== date) {
+        !Number.isFinite(dateStart.getTime()) ||
+        dateStart.toISOString().slice(0, 10) !== date) {
       return res.status(400).json({ ok: false, error: "Data non valida. Usa YYYY-MM-DD." });
     }
     if (leagueId && !/^l_[A-Za-z0-9_-]+$/.test(leagueId)) {
