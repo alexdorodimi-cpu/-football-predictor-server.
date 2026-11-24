@@ -3597,34 +3597,71 @@ app.get(
   }
 );
 
-// Riconciliazione nomi campionati in un'unica esecuzione asincrona.
-// La richiesta di avvio torna subito; il progresso si legge dall'endpoint /status.
-// Se il processo Render si riavvia, la procedura può essere rilanciata: è idempotente.
+// Riconciliazione nomi campionati con checkpoint persistente su Supabase.
+// La procedura riprende dal cursore salvato anche dopo un riavvio di Render.
+const LEAGUE_NAME_REPAIR_JOB_KEY = "league_name_repair";
 const leagueNameRepairJob = {
   running: false, started_at: null, finished_at: null, error: null,
   scanned: 0, rows_updated: 0, unchanged: 0, missing_names: 0,
   conflicting_names: 0, unmapped_league_ids: 0, cursor: null,
-  total_batches: 0, batch_size: 1000
+  total_batches: 0, batch_size: 1000, status: "idle"
 };
 
+function applyPersistedLeagueRepairState(row) {
+  if (!row) return;
+  for (const key of [
+    "started_at", "finished_at", "error", "scanned", "rows_updated",
+    "unchanged", "missing_names", "conflicting_names",
+    "unmapped_league_ids", "cursor", "total_batches", "batch_size", "status"
+  ]) {
+    if (row[key] !== undefined) leagueNameRepairJob[key] = row[key];
+  }
+}
+
+async function readPersistedLeagueRepairState() {
+  const { data, error } = await supabase.from("data_repair_jobs")
+    .select("*").eq("job_key", LEAGUE_NAME_REPAIR_JOB_KEY).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function persistLeagueRepairState(extra = {}) {
+  const row = {
+    job_key: LEAGUE_NAME_REPAIR_JOB_KEY,
+    status: leagueNameRepairJob.status,
+    started_at: leagueNameRepairJob.started_at,
+    finished_at: leagueNameRepairJob.finished_at,
+    error: leagueNameRepairJob.error,
+    scanned: leagueNameRepairJob.scanned,
+    rows_updated: leagueNameRepairJob.rows_updated,
+    unchanged: leagueNameRepairJob.unchanged,
+    missing_names: leagueNameRepairJob.missing_names,
+    conflicting_names: leagueNameRepairJob.conflicting_names,
+    unmapped_league_ids: leagueNameRepairJob.unmapped_league_ids,
+    cursor: leagueNameRepairJob.cursor,
+    total_batches: leagueNameRepairJob.total_batches,
+    batch_size: leagueNameRepairJob.batch_size,
+    updated_at: new Date().toISOString(),
+    ...extra
+  };
+  const { error } = await supabase.from("data_repair_jobs")
+    .upsert(row, { onConflict: "job_key" });
+  if (error) throw error;
+}
+
 async function runLeagueNameRepair() {
+  if (leagueNameRepairJob.running) return;
   leagueNameRepairJob.running = true;
-  leagueNameRepairJob.started_at = new Date().toISOString();
-  leagueNameRepairJob.finished_at = null;
+  leagueNameRepairJob.status = "running";
   leagueNameRepairJob.error = null;
-  leagueNameRepairJob.scanned = 0;
-  leagueNameRepairJob.rows_updated = 0;
-  leagueNameRepairJob.unchanged = 0;
-  leagueNameRepairJob.missing_names = 0;
-  leagueNameRepairJob.conflicting_names = 0;
-  leagueNameRepairJob.unmapped_league_ids = 0;
-  leagueNameRepairJob.cursor = null;
-  leagueNameRepairJob.total_batches = 0;
+  if (!leagueNameRepairJob.started_at) leagueNameRepairJob.started_at = new Date().toISOString();
+  leagueNameRepairJob.finished_at = null;
   try {
+    await persistLeagueRepairState();
     const catalog = await getLeagueCatalog();
     const namesById = new Map(catalog.filter(item => item?.id && item?.name)
       .map(item => [String(item.id), String(item.name)]));
-    const pageSize = leagueNameRepairJob.batch_size;
+    const pageSize = leagueNameRepairJob.batch_size || 1000;
     while (true) {
       let query = supabase.from("matches")
         .select("id,league_id,league_name")
@@ -3655,44 +3692,75 @@ async function runLeagueNameRepair() {
           leagueNameRepairJob.rows_updated += Math.min(100, ids.length - i);
         }
       }
+      // Checkpoint solo dopo aver salvato tutte le modifiche della pagina:
+      // in caso di crash si ripete al massimo l'ultima pagina (operazione idempotente).
       leagueNameRepairJob.scanned += page.length;
       leagueNameRepairJob.total_batches++;
       leagueNameRepairJob.cursor = String(page[page.length - 1].id);
+      await persistLeagueRepairState();
       if (page.length < pageSize) break;
     }
+    leagueNameRepairJob.status = "completed";
   } catch (error) {
     leagueNameRepairJob.error = String(error?.message || error);
+    leagueNameRepairJob.status = "failed";
   } finally {
     leagueNameRepairJob.running = false;
     leagueNameRepairJob.finished_at = new Date().toISOString();
+    try {
+      await persistLeagueRepairState();
+    } catch (persistError) {
+      leagueNameRepairJob.error = [
+        leagueNameRepairJob.error,
+        "Errore salvataggio checkpoint: " + String(persistError?.message || persistError)
+      ].filter(Boolean).join(" | ");
+      leagueNameRepairJob.status = "failed";
+    }
   }
 }
 
-app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, (req, res) => {
+app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async (req, res) => {
   const action = String(req.query.action || "").toLowerCase();
-  if (action === "status") {
-    return res.json({ ok: !leagueNameRepairJob.error, ...leagueNameRepairJob });
-  }
-  const apply = String(req.query.apply || "false").toLowerCase() === "true";
-  if (!apply) {
-    return res.status(400).json({
-      ok: false,
-      error: "Per avviare l'aggiornamento completo usa apply=true. Per controllare lo stato usa action=status."
+  try {
+    const persisted = await readPersistedLeagueRepairState();
+    if (persisted) applyPersistedLeagueRepairState(persisted);
+    if (action === "status") {
+      const localRunning = leagueNameRepairJob.running;
+      return res.json({
+        ok: !leagueNameRepairJob.error,
+        ...leagueNameRepairJob,
+        running: localRunning,
+        resumable: !localRunning && persisted?.status === "running"
+      });
+    }
+    const apply = String(req.query.apply || "false").toLowerCase() === "true";
+    if (!apply) {
+      return res.status(400).json({
+        ok: false,
+        error: "Per avviare o riprendere l'aggiornamento usa apply=true. Per controllare lo stato usa action=status."
+      });
+    }
+    if (leagueNameRepairJob.running) {
+      return res.json({ ok: true, already_running: true, ...leagueNameRepairJob });
+    }
+    if (persisted?.status === "completed") {
+      return res.json({ ok: true, already_completed: true, ...leagueNameRepairJob });
+    }
+    // Riprende da cursor e contatori persistiti. Se nessun checkpoint esiste,
+    // parte dall'inizio; le righe già corrette vengono riconosciute come invariate.
+    leagueNameRepairJob.running = true;
+    runLeagueNameRepair();
+    return res.status(202).json({
+      ok: true,
+      started: true,
+      resumed: Boolean(persisted?.cursor),
+      message: "Aggiornamento avviato o ripreso in background. Controllare action=status.",
+      cursor: leagueNameRepairJob.cursor,
+      batch_size: leagueNameRepairJob.batch_size
     });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error) });
   }
-  if (leagueNameRepairJob.running) {
-    return res.json({ ok: true, already_running: true, ...leagueNameRepairJob });
-  }
-  // Se già completato, non ripetere inutilmente il lavoro.
-  if (leagueNameRepairJob.finished_at && !leagueNameRepairJob.error) {
-    return res.json({ ok: true, already_completed: true, ...leagueNameRepairJob });
-  }
-  runLeagueNameRepair();
-  return res.status(202).json({
-    ok: true, started: true,
-    message: "Aggiornamento avviato in background. Non richiamare apply=true; controllare action=status.",
-    batch_size: leagueNameRepairJob.batch_size
-  });
 });
 
 // Report giornaliero CSV delle previsioni. Senza quote affidabili non
