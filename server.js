@@ -37,6 +37,7 @@ const PORT = process.env.PORT || 10000;
 const PITCHAPI_URL = "https://api.pitchapi.dev/v1";
 const PITCHAPI_KEY = String(process.env.PITCHAPI_KEY || "").trim();
 const ACCESS_TOKEN = String(process.env.PREDICTOR_ACCESS_TOKEN || "").trim();
+const RANDOM_FOREST_ENABLED = String(process.env.ENABLE_RANDOM_FOREST || "").toLowerCase() === "true";
 
 app.use("/api/", rateLimit({
   windowMs: 60 * 1000,
@@ -995,11 +996,13 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
   }
   // Random Forest sperimentale: addestramento su partite precedenti al target.
   // Non sostituisce Poisson; contribuisce solo se esiste uno storico sufficiente.
-  const randomForestForecast = predictRandomForest(history, {
-    home_team: homeName,
-    away_team: awayName,
-    match_date: fixtureDate
-  });
+  const randomForestForecast = RANDOM_FOREST_ENABLED
+    ? predictRandomForest(history, {
+        home_team: homeName,
+        away_team: awayName,
+        match_date: fixtureDate
+      })
+    : { applied: false, training_matches: 0, reason: "Random Forest disattivato: impostare ENABLE_RANDOM_FOREST=true dopo il test controllato." };
   const RANDOM_FOREST_BLEND_WEIGHT = randomForestForecast.applied ? 0.20 : 0;
   const lambdasBeforeRandomForest = { home: homeLambda, away: awayLambda };
   if (randomForestForecast.applied) {
