@@ -15,12 +15,10 @@ async function main() {
   const url = new URL(`${baseUrl}/api/backtest/${encodeURIComponent(leagueId)}`);
   if (season) url.searchParams.set("season", season);
   url.searchParams.set("limit", String(limit));
-  // Usa la stessa modalità paginata che ha prodotto il backtest statistico
-  // verificato: la modalità standard seleziona solo le partite più recenti,
-  // che in questo dataset possono non avere uno storico sufficiente per il modello.
-  url.searchParams.set("include_stats", "true");
-  url.searchParams.set("stats_limit", String(limit));
-  url.searchParams.set("offset", "0");
+  // Questo workflow valuta i mercati goal/1X2. Le statistiche avanzate
+  // sono già elaborate dal workflow dedicato: ricalcolarle qui, partita
+  // per partita, provoca timeout sulla singola richiesta HTTP a Render.
+  url.searchParams.set("include_stats", "false");
 
   const headers = { Accept: "application/json" };
   if (process.env.PREDICTOR_ACCESS_TOKEN) {
