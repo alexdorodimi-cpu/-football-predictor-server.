@@ -4685,7 +4685,7 @@ async function runAutomaticResultsSync() {
       const leagueId = String(league.id || "");
       if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) continue;
       const seasons = Array.isArray(league.seasons)
-        ? league.seasons.filter(value => /^(?:\d{4}\\/\d{4}|\d{4})$/.test(String(value)))
+        ? league.seasons.filter(value => { const text = String(value); return /^\d{4}$/.test(text) || (text.length === 9 && text[4] === "/" && /^\d{4}$/.test(text.slice(0, 4)) && /^\d{4}$/.test(text.slice(5))); })
         : [];
 
       for (const season of seasons) {
