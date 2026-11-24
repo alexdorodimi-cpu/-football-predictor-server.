@@ -2490,6 +2490,28 @@ app.get(
           } : {})
         });
 
+        if (includeStats) {
+          // Valuta anche i mercati derivati dai gol: doppia chance, multigol e combo.
+          // Usa la probabilità del modello e il risultato effettivo della partita.
+          const goalMarketKeys = [
+            "double_chance_1x", "double_chance_x2", "double_chance_12",
+            "multigoal_1_2", "multigoal_1_3", "multigoal_1_4",
+            "multigoal_2_3", "multigoal_2_4", "multigoal_2_5", "multigoal_3_4",
+            "combo_1x_over_1_5", "combo_1x_under_2_5",
+            "combo_x2_over_1_5", "combo_x2_under_2_5",
+            "combo_12_over_1_5", "combo_12_under_2_5",
+            "dc_combo_1x_multigoal_1_4", "dc_combo_x2_multigoal_1_4",
+            "dc_combo_12_multigoal_1_4"
+          ];
+          for (const key of goalMarketKeys) {
+            const probability = getNumber(p[key]);
+            const actualMarket = results[results.length - 1].actual_markets[key];
+            if (probability === null || typeof actualMarket !== "boolean") continue;
+            if (!statisticalMarketRows[key]) statisticalMarketRows[key] = [];
+            statisticalMarketRows[key].push({ probability, actual: actualMarket });
+          }
+        }
+
         if (includeStats && historicalStatsForecast?.probabilities && actualMatchStats) {
           const statFields = ["corners", "total_shots", "shots_on_target", "shots_off_target",
             "blocked_shots", "yellow_cards", "red_cards", "fouls", "offsides", "saves",
@@ -2860,7 +2882,15 @@ app.get(
         evaluated_matches: evaluated,
         accuracy_by_market: accuracyByMarket,
         statistical_accuracy_by_market: includeStats ? statisticalAccuracyByMarket : null,
-        statistical_backtest: { enabled: includeStats, evaluated_matches: includeStats ? results.filter(r => r.actual_statistics).length : 0, requested_limit: includeStats ? Math.min(limit, statsEvaluationLimit) : 0, offset },
+        statistical_backtest: {
+          enabled: includeStats,
+          evaluated_matches: includeStats ? results.length : 0,
+          goal_markets: includeStats ? Object.keys(statisticalMarketRows).filter(key => key.startsWith("double_chance_") || key.startsWith("multigoal_") || key.startsWith("combo_") || key.startsWith("dc_combo_")).length : 0,
+          statistical_markets: includeStats ? Object.keys(statisticalMarketRows).filter(key => !key.startsWith("double_chance_") && !key.startsWith("multigoal_") && !key.startsWith("combo_") && !key.startsWith("dc_combo_")).length : 0,
+          matches_with_actual_statistics: includeStats ? results.filter(r => r.actual_statistics).length : 0,
+          requested_limit: includeStats ? Math.min(limit, statsEvaluationLimit) : 0,
+          offset
+        },
         advanced_metrics: advancedMetrics,
         model: "Poisson con shrinkage bayesiano",
         results
