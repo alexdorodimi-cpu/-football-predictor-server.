@@ -3722,10 +3722,10 @@ async function runLeagueNameRepair() {
 app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async (req, res) => {
   const action = String(req.query.action || "").toLowerCase();
   try {
+    const localRunning = leagueNameRepairJob.running;
     const persisted = await readPersistedLeagueRepairState();
-    if (persisted) applyPersistedLeagueRepairState(persisted);
+    if (persisted && !localRunning) applyPersistedLeagueRepairState(persisted);
     if (action === "status") {
-      const localRunning = leagueNameRepairJob.running;
       return res.json({
         ok: !leagueNameRepairJob.error,
         ...leagueNameRepairJob,
