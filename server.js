@@ -3526,7 +3526,7 @@ app.get(
             threshold_percent: threshold,
             evaluated: selected.length,
             correct: correctCount,
-            accuracy_percent: selected.length ? Number((correctCount / selected.length * 100).toFixed(2)) : null,
+            precision_percent: selected.length ? Number((correctCount / selected.length * 100).toFixed(2)) : null,
             coverage_percent: rows.length ? Number((selected.length / rows.length * 100).toFixed(2)) : null
           };
         });
