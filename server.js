@@ -281,18 +281,59 @@ function getMatches(body) {
   return [];
 }
 
-const EUROPEAN_COUNTRY_CODES = new Set(["ALB","AND","ARM","AUT","AZE","BEL","BIH","BLR","BUL","CRO","CYP","CZE","DEN","ENG","ESP","EST","FIN","FRA","FRO","GEO","GER","GRE","HUN","IRL","ISL","ISR","ITA","KAZ","KVX","KOS","LIE","LTU","LUX","LVA","MDA","MKD","MLT","MNE","NED","NIR","NOR","POL","POR","ROU","RUS","SCO","SMR","SRB","SVK","SVN","SWE","SUI","TUR","UKR","WAL","GBR","GB","NL","RO","IT","DE","FR","ES","PT","BE","AT","CH","GR","HR","RS","UA","SE","NO","DK","FI","PL","CZ","SK","SI","HU","BG","IE","IS","CY","TR","LU","MT","EE","LV","LT","BA","ME","AL","MK","MD","AD","LI","FO","AM","AZ","GE","BY","XK"]);
-const EUROPEAN_COUNTRY_NAMES = new Set(["albania","andorra","armenia","austria","azerbaijan","belarus","belgium","bosnia and herzegovina","bulgaria","croatia","cyprus","czech republic","czechia","denmark","england","estonia","faroe islands","finland","france","georgia","germany","greece","hungary","iceland","ireland","israel","italy","kazakhstan","kosovo","latvia","liechtenstein","lithuania","luxembourg","malta","moldova","monaco","montenegro","netherlands","north macedonia","northern ireland","norway","poland","portugal","romania","russia","san marino","scotland","serbia","slovakia","slovenia","spain","sweden","switzerland","turkey","ukraine","wales","united kingdom"]);
+const EUROPEAN_COUNTRY_CODES = new Set([
+ "ALB","AND","ARM","AUT","AZE","BEL","BIH","BLR","BUL","CRO","CYP","CZE",
+ "DEN","ENG","ESP","EST","FIN","FRA","FRO","GEO","GER","GRE","HUN","IRL",
+ "ISL","ISR","ITA","KAZ","KOS","KVX","LIE","LTU","LUX","LVA","MDA","MKD",
+ "MLT","MNE","NED","NIR","NOR","POL","POR","ROU","RUS","SCO","SMR","SRB",
+ "SVK","SVN","SWE","SUI","TUR","UKR","WAL","GBR","GB","NL","RO","IT","DE",
+ "FR","ES","PT","BE","AT","CH","GR","HR","RS","UA","SE","NO","DK","FI",
+ "PL","CZ","SK","SI","HU","BG","IE","IS","CY","TR","LU","MT","EE","LV",
+ "LT","BA","ME","AL","MK","MD","AD","LI","FO","AM","AZ","GE","BY","XK"
+]);
+const EUROPEAN_COUNTRY_NAMES = new Set([
+ "albania","andorra","armenia","austria","azerbaijan","belarus","belgium",
+ "bosnia and herzegovina","bulgaria","croatia","cyprus","czech republic",
+ "czechia","denmark","england","estonia","faroe islands","finland","france",
+ "georgia","germany","greece","hungary","iceland","ireland","israel","italy",
+ "kazakhstan","kosovo","latvia","liechtenstein","lithuania","luxembourg",
+ "malta","moldova","monaco","montenegro","netherlands","the netherlands",
+ "north macedonia","northern ireland","norway","poland","portugal","romania",
+ "russia","san marino","scotland","serbia","slovakia","slovenia","spain",
+ "sweden","switzerland","turkey","ukraine","wales","united kingdom",
+ "republic of ireland","republic of moldova"
+]);
 function isEuropeanLeague(league) {
- const name=String(league?.name||league?.league_name||"").toLowerCase();
- const code=String(league?.country_code||league?.country?.code||"").trim().toUpperCase();
- const country=String(league?.country_name||league?.country?.name||league?.country||"").trim().toLowerCase();
- const international=/champions league|uefa champions|europa league|conference league|uefa conference|world cup|fifa world cup|european championship|uefa euro/i.test(name);
- return international||EUROPEAN_COUNTRY_CODES.has(code)||EUROPEAN_COUNTRY_NAMES.has(country);
+ const countryObj = league?.country && typeof league.country === "object" ? league.country : {};
+ const name = String(league?.name || league?.league_name || "").trim().toLowerCase();
+ const countryCode = String(
+   league?.country_code || league?.country?.code || league?.country?.iso2 ||
+   league?.country?.alpha2 || league?.country_iso || countryObj.code ||
+   countryObj.iso2 || countryObj.alpha2 || ""
+ ).trim().toUpperCase();
+ const countryName = String(
+   league?.country_name || countryObj.name || countryObj.country_name ||
+   (typeof league?.country === "string" ? league.country : "")
+ ).trim().toLowerCase();
+ const continent = String(
+   league?.continent || league?.region || countryObj.continent ||
+   countryObj.region || league?.country_continent || ""
+ ).trim().toLowerCase();
+ const isEuropeanCountry = EUROPEAN_COUNTRY_CODES.has(countryCode) ||
+   EUROPEAN_COUNTRY_NAMES.has(countryName) ||
+   continent === "europe" || continent === "europa";
+ // Tutte le divisioni e coppe nazionali dei paesi europei restano incluse:
+ // non viene applicato alcun filtro per popolarità o livello.
+ const internationalCompetition =
+   /champions league|uefa champions|europa league|conference league|uefa conference|world cup|fifa world cup|european championship|uefa euro/i.test(name);
+ return isEuropeanCountry || internationalCompetition;
 }
 async function getEuropeanLeagueCatalog() {
- const body=await sportGet("/leagues");
- const leagues=Array.isArray(body?.data?.leagues)?body.data.leagues:Array.isArray(body?.leagues)?body.leagues:Array.isArray(body?.data)?body.data:getMatches(body);
+ const body = await sportGet("/leagues");
+ const leagues = Array.isArray(body?.data?.leagues) ? body.data.leagues
+   : Array.isArray(body?.leagues) ? body.leagues
+   : Array.isArray(body?.data) ? body.data
+   : getMatches(body);
  return leagues.filter(isEuropeanLeague);
 }
 function getMatchLeagueId(match) {
