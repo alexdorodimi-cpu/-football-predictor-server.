@@ -535,17 +535,17 @@ async function getLeagueMatchesFromDatabase(
     throw new Error("Supabase non configurato.");
   }
 
-  let query = supabase
+  // Usa lo storico di TUTTE le stagioni disponibili del campionato.
+  // calculatePrediction filtra poi ogni campione in base alla data della
+  // partita da prevedere: nessun risultato successivo può contaminare il modello.
+  // Il parametro season resta accettato per compatibilità con le chiamate esistenti,
+  // ma non restringe più lo storico di apprendimento.
+  const { data, error } = await supabase
     .from("matches")
     .select("*")
     .eq("league_id", String(leagueId))
-    .order("match_date", { ascending: true });
-
-  if (season) {
-    query = query.eq("season", String(season));
-  }
-
-  const { data, error } = await query.limit(5000);
+    .order("match_date", { ascending: true })
+    .limit(5000);
 
   if (error) {
     throw error;
