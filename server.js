@@ -2872,6 +2872,34 @@ app.get(
               .maybeSingle();
             if (storedStatsError) throw storedStatsError;
             actualMatchStats = storedStats?.normalized_stats || null;
+
+            // Se le statistiche della partita target non sono ancora in Supabase,
+            // recuperale direttamente da PitchAPI: non scartare una valutazione valida
+            // solo perché il backfill del database non è ancora arrivato.
+            if (!actualMatchStats) {
+              try {
+                const actualBody = await sportGet(
+                  "/matches/" + encodeURIComponent(match.id) + "/stats"
+                );
+                actualMatchStats = getNormalizedMatchStats(actualBody);
+                if (actualMatchStats) {
+                  const { error: saveActualStatsError } = await supabase
+                    .from("match_statistics")
+                    .upsert({
+                      match_id: String(match.id),
+                      league_id: String(match.league_id || leagueId),
+                      match_date: match.match_date,
+                      normalized_stats: actualMatchStats,
+                      updated_at: new Date().toISOString()
+                    }, { onConflict: "match_id" });
+                  if (saveActualStatsError) {
+                    console.error("Persistenza statistiche target " + match.id + ":", saveActualStatsError.message);
+                  }
+                }
+              } catch (fetchActualStatsError) {
+                console.error("Recupero statistiche target " + match.id + ":", fetchActualStatsError.message);
+              }
+            }
           } catch (statsError) {
             console.error("Backtest statistiche " + match.id + ":", statsError.message);
           }
@@ -2982,10 +3010,18 @@ app.get(
           for (const field of statFields) {
             const actualHome = getNumber(actualMatchStats[field]?.home);
             const actualAway = getNumber(actualMatchStats[field]?.away);
-            if (actualHome === null || actualAway === null) continue;
-            const actualValues = { home: actualHome, away: actualAway, total: actualHome + actualAway };
+            const actualValues = {
+              home: actualHome,
+              away: actualAway,
+              total: actualHome !== null && actualAway !== null
+                ? actualHome + actualAway
+                : null
+            };
             for (const side of ["home", "away", "total"]) {
               const actualValue = actualValues[side];
+              // Una statistica mancante per una squadra non deve annullare
+              // la valutazione valida dell'altra squadra.
+              if (actualValue === null) continue;
               for (let half = 1; half <= 20; half++) {
                 const line = half - 0.5;
                 const suffix = String(line).replace(".", "_");
@@ -3359,16 +3395,40 @@ app.get(
       const statisticalAccuracyByMarket = {};
       for (const [market, tested] of Object.entries(statisticalMarketRows)) {
         if (!tested.length) continue;
-        let tp = 0, tn = 0, fp = 0, fn = 0, brier = 0;
+        let tp = 0, tn = 0, fp = 0, fn = 0, brier = 0, logLoss = 0;
+        const calibrationBins = Array.from({ length: 10 }, (_, index) => ({
+          range: `${index * 10}-${(index + 1) * 10}%`,
+          count: 0,
+          probability_sum: 0,
+          observed_sum: 0
+        }));
+        const metricEpsilon = 1e-6;
         for (const item of tested) {
-          const predicted = item.probability >= 50;
+          const probability = Math.max(0, Math.min(1, item.probability / 100));
+          const predicted = probability >= 0.5;
           if (predicted && item.actual) tp++;
           else if (!predicted && !item.actual) tn++;
           else if (predicted && !item.actual) fp++;
           else fn++;
-          brier += Math.pow(item.probability / 100 - (item.actual ? 1 : 0), 2);
+          const actualBinary = item.actual ? 1 : 0;
+          brier += Math.pow(probability - actualBinary, 2);
+          logLoss += -(actualBinary
+            ? Math.log(Math.max(metricEpsilon, probability))
+            : Math.log(Math.max(metricEpsilon, 1 - probability)));
+          const binIndex = Math.min(9, Math.floor(probability * 10));
+          calibrationBins[binIndex].count++;
+          calibrationBins[binIndex].probability_sum += probability;
+          calibrationBins[binIndex].observed_sum += actualBinary;
         }
         const evaluated = tested.length;
+        const calibration = calibrationBins
+          .filter(bin => bin.count > 0)
+          .map(bin => ({
+            range: bin.range,
+            count: bin.count,
+            average_predicted_probability: Number((bin.probability_sum / bin.count * 100).toFixed(2)),
+            actual_frequency: Number((bin.observed_sum / bin.count * 100).toFixed(2))
+          }));
         const correctCount = tp + tn;
         const sensitivity = tp + fn ? tp / (tp + fn) : null;
         const specificity = tn + fp ? tn / (tn + fp) : null;
@@ -3395,7 +3455,10 @@ app.get(
           balanced_accuracy_percent: balancedAccuracy === null ? null : Number((balancedAccuracy * 100).toFixed(2)),
           majority_baseline_accuracy_percent: Number((majorityBaseline * 100).toFixed(2)),
           beats_majority_baseline: correctCount / evaluated > majorityBaseline,
-          brier_score: Number((brier / evaluated).toFixed(4))
+          decision_threshold_percent: 50,
+          brier_score: Number((brier / evaluated).toFixed(4)),
+          log_loss: Number((logLoss / evaluated).toFixed(4)),
+          calibration
         };
       }
 
