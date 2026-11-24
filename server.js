@@ -606,9 +606,15 @@ async function saveMatchesToDatabase(
   // omesso dal payload: mai cancellare un nome già presente con null.
   const namesById = await getLeagueNameMap();
   for (const row of rows) {
-    if (!row.league_name) {
-      const catalogName = namesById.get(String(row.league_id));
-      if (catalogName) row.league_name = catalogName;
+    const catalogName = namesById.get(String(row.league_id));
+    if (catalogName) {
+      // Il catalogo è la fonte canonica: sovrascrive anche eventuali nomi
+      // obsoleti restituiti dalla fixture e impedisce upsert con nomi vuoti.
+      row.league_name = catalogName;
+    } else if (!row.league_name) {
+      // Non salvare una partita priva di nome se l'ID non è nel catalogo:
+      // evita che un upsert trasformi un nome esistente in NULL.
+      throw new Error("Nome campionato non risolvibile per league_id " + row.league_id + ". Upsert annullato per sicurezza.");
     }
   }
 
