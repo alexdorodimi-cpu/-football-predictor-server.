@@ -3598,7 +3598,8 @@ app.get(
 );
 
 // Riconcilia i nomi dei campionati usando league_id -> catalogo PitchAPI.
-// La modalità predefinita è sola lettura; apply=true applica gli aggiornamenti.
+// Dry-run completo per impostazione predefinita. apply=true lavora a blocchi
+// piccoli e riprendibili: passare next_cursor come cursor nella chiamata successiva.
 app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async (req, res) => {
   try {
     const apply = String(req.query.apply || "false").toLowerCase() === "true";
@@ -3607,59 +3608,71 @@ app.get("/api/data/repair-league-names", requireSportApi, requireDatabase, async
       catalog.filter(item => item && item.id && item.name)
         .map(item => [String(item.id), String(item.name)])
     );
-    const pageSize = 1000;
-    let offset = 0;
-    let scanned = 0;
+    const pageSize = apply
+      ? Math.max(1, Math.min(500, Number.parseInt(req.query.limit || "250", 10) || 250))
+      : 1000;
+    const cursor = req.query.cursor ? String(req.query.cursor) : null;
+    let query = supabase.from("matches")
+      .select("id,league_id,league_name")
+      .order("id", { ascending: true })
+      .limit(pageSize);
+    if (cursor) query = query.gt("id", cursor);
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = data || [];
     let missingNames = 0;
     let conflictingNames = 0;
     let unchanged = 0;
     let updated = 0;
     let unmapped = 0;
+    const grouped = new Map();
     const changes = [];
-    while (true) {
-      const { data, error } = await supabase.from("matches")
-        .select("id,league_id,league_name")
-        .order("match_date", { ascending: true })
-        .range(offset, offset + pageSize - 1);
-      if (error) throw error;
-      const page = data || [];
-      scanned += page.length;
-      const grouped = new Map();
-      for (const row of page) {
-        const authoritativeName = namesById.get(String(row.league_id || ""));
-        if (!authoritativeName) { unmapped++; continue; }
-        if (String(row.league_name || "").trim() === authoritativeName) {
-          unchanged++; continue;
-        }
-        if (!row.league_name) missingNames++;
-        else conflictingNames++;
-        if (!grouped.has(authoritativeName)) grouped.set(authoritativeName, []);
-        grouped.get(authoritativeName).push(String(row.id));
-        if (changes.length < 30) changes.push({
-          match_id: String(row.id), league_id: String(row.league_id),
-          old_name: row.league_name || null, catalog_name: authoritativeName
-        });
+    for (const row of page) {
+      const authoritativeName = namesById.get(String(row.league_id || ""));
+      if (!authoritativeName) { unmapped++; continue; }
+      if (String(row.league_name || "").trim() === authoritativeName) {
+        unchanged++;
+        continue;
       }
-      if (apply) {
-        for (const [leagueName, ids] of grouped) {
-          for (let i = 0; i < ids.length; i += 200) {
-            const batch = ids.slice(i, i + 200);
-            const { error: updateError } = await supabase.from("matches")
-              .update({ league_name: leagueName }).in("id", batch);
-            if (updateError) throw updateError;
-            updated += batch.length;
-          }
-        }
-      }
-      if (page.length < pageSize) break;
-      offset += page.length;
+      if (!row.league_name) missingNames++;
+      else conflictingNames++;
+      if (!grouped.has(authoritativeName)) grouped.set(authoritativeName, []);
+      grouped.get(authoritativeName).push(String(row.id));
+      if (changes.length < 30) changes.push({
+        match_id: String(row.id), league_id: String(row.league_id),
+        old_name: row.league_name || null, catalog_name: authoritativeName
+      });
     }
+    if (apply) {
+      for (const [leagueName, ids] of grouped) {
+        for (let i = 0; i < ids.length; i += 100) {
+          const batch = ids.slice(i, i + 100);
+          const { error: updateError } = await supabase.from("matches")
+            .update({ league_name: leagueName }).in("id", batch);
+          if (updateError) throw updateError;
+          updated += batch.length;
+        }
+      }
+    }
+    const hasMore = apply && page.length === pageSize;
     res.json({
-      ok: true, mode: apply ? "applied" : "dry_run",
-      scanned, missing_names: missingNames, conflicting_names: conflictingNames,
-      unchanged, unmapped_league_ids: unmapped, rows_updated: updated,
-      catalog_leagues: namesById.size, sample_changes: changes,
-      note: "I nomi sono ricavati esclusivamente dal catalogo PitchAPI tramite league_id; gli ID delle partite e i risultati non vengono modificati."
+      ok: true,
+      mode: apply ? "applied_batch" : "dry_run",
+      cursor_in: cursor,
+      next_cursor: hasMore ? String(page[page.length - 1].id) : null,
+      has_more: hasMore,
+      batch_size: page.length,
+      scanned: page.length,
+      missing_names: missingNames,
+      conflicting_names: conflictingNames,
+      unchanged,
+      unmapped_league_ids: unmapped,
+      rows_updated: updated,
+      catalog_leagues: namesById.size,
+      sample_changes: changes,
+      note: apply
+        ? "Blocco completato. Se has_more=true, ripeti la stessa richiesta con cursor=next_cursor. L'operazione è idempotente e aggiorna solo league_name."
+        : "Dry-run sul primo blocco ordinato per ID; nessuna riga modificata. Per applicare usare apply=true e proseguire con next_cursor."
     });
   } catch (error) { handleError(res, error); }
 });
