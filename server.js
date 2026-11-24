@@ -862,7 +862,7 @@ function sampleForTeamByVenue(matches, teamName, beforeDate, venue) {
     });
 }
 
-function calculatePrediction(fixture, history, lineupImpact = null, statisticalForecast = null) {
+function calculatePrediction(fixture, history, lineupImpact = null, statisticalForecast = null, coachImpact = null) {
   const homeName = fixture.home_team || getHomeName(fixture);
   const awayName = fixture.away_team || getAwayName(fixture);
   const fixtureDate = fixture.match_date || fixture.date || fixture.datetime;
@@ -1008,6 +1008,16 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
       XG_BLEND_WEIGHT * Number(xgAverages.away)
     ));
   }
+  // Correzione prudente per cambio allenatore: deriva dal differenziale reti
+  // osservato con il tecnico attuale rispetto ai precedenti, mai da un nome in sé.
+  const homeCoachAdjustment = coachImpact?.home?.applied
+    ? Number(coachImpact.home.adjustment_percent || 0) / 100 : 0;
+  const awayCoachAdjustment = coachImpact?.away?.applied
+    ? Number(coachImpact.away.adjustment_percent || 0) / 100 : 0;
+  const lambdasBeforeCoach = { home: homeLambda, away: awayLambda };
+  homeLambda = Math.max(0.10, Math.min(4.5, homeLambda * (1 + homeCoachAdjustment) * (1 - awayCoachAdjustment * 0.5)));
+  awayLambda = Math.max(0.10, Math.min(4.5, awayLambda * (1 + awayCoachAdjustment) * (1 - homeCoachAdjustment * 0.5)));
+
   // Random Forest sperimentale: addestramento su partite precedenti al target.
   // Non sostituisce Poisson; contribuisce solo se esiste uno storico sufficiente.
   const randomForestForecast = RANDOM_FOREST_ENABLED
@@ -2196,6 +2206,118 @@ async function getFixturePlayerForm(fixture, history) {
   return output;
 }
 
+// ==========================================
+// IMPATTO ALLENATORE: STORICO RECENTE PER TECNICO
+// ==========================================
+const coachLineupCache = new Map();
+const COACH_LINEUP_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function getCachedCoachLineup(matchId) {
+  const key = String(matchId);
+  const cached = coachLineupCache.get(key);
+  if (cached && Date.now() - cached.savedAt < COACH_LINEUP_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const body = await sportGet(`/matches/${encodeURIComponent(key)}/lineups`);
+  const data = extractLineupData(body);
+  if (coachLineupCache.size >= 500) {
+    const oldestKey = coachLineupCache.keys().next().value;
+    if (oldestKey) coachLineupCache.delete(oldestKey);
+  }
+  coachLineupCache.set(key, { data, savedAt: Date.now() });
+  return data;
+}
+
+function normalizeCoachTeamName(value) {
+  return String(value || "").normalize("NFD")
+    .replace(/[\\u0300-\\u036f]/g, "").trim().toLowerCase().replace(/\\s+/g, " ");
+}
+
+async function getCoachChangeImpact(fixture, history) {
+  const result = {
+    applied: false,
+    reason: "Storico allenatori insufficiente o allenatore non disponibile.",
+    home: null,
+    away: null,
+    max_adjustment_percent: 3
+  };
+  const fixtureDate = new Date(fixture.match_date || fixture.date || fixture.datetime);
+  if (!Number.isFinite(fixtureDate.getTime())) return result;
+
+  const sides = [
+    { key: "home", name: fixture.home_team, id: fixture.home_team_id || getHomeId(fixture) },
+    { key: "away", name: fixture.away_team, id: fixture.away_team_id || getAwayId(fixture) }
+  ];
+  const tasks = [];
+  for (const side of sides) {
+    const teamName = normalizeCoachTeamName(side.name);
+    const teamMatches = (history || []).filter(match => {
+      const date = match.match_date || match.date;
+      if (!date || new Date(date) >= fixtureDate || !isFinished(match)) return false;
+      const homeId = match.home_team_id || getHomeId(match);
+      const awayId = match.away_team_id || getAwayId(match);
+      if (side.id && (homeId || awayId)) {
+        return String(homeId || "") === String(side.id) || String(awayId || "") === String(side.id);
+      }
+      return normalizeCoachTeamName(match.home_team) === teamName ||
+        normalizeCoachTeamName(match.away_team) === teamName;
+    }).sort((a,b) => new Date(b.match_date || b.date) - new Date(a.match_date || a.date)).slice(0, 8);
+    tasks.push({ side, teamMatches });
+  }
+
+  const teamResults = await Promise.all(tasks.map(async ({side, teamMatches}) => {
+    const observations = await mapWithConcurrency(teamMatches, 3, async match => {
+      try {
+        const lineup = await getCachedCoachLineup(match.id);
+        const homeId = match.home_team_id || getHomeId(match);
+        const isHome = side.id && homeId
+          ? String(homeId) === String(side.id)
+          : normalizeCoachTeamName(match.home_team) === normalizeCoachTeamName(side.name);
+        const teamLineup = isHome ? lineup?.home : lineup?.away;
+        const coach = teamLineup?.coach?.name || teamLineup?.coach || null;
+        if (!coach || getNumber(match.home_goals) === null || getNumber(match.away_goals) === null) return null;
+        const scored = Number(isHome ? match.home_goals : match.away_goals);
+        const conceded = Number(isHome ? match.away_goals : match.home_goals);
+        return { coach: String(coach).trim(), scored, conceded, date: match.match_date || match.date };
+      } catch (error) {
+        return null;
+      }
+    });
+    const valid = observations.filter(Boolean).sort((a,b) => new Date(b.date)-new Date(a.date));
+    if (!valid.length) return { team: side.name, applied:false, reason:"Nessun allenatore rilevato nelle formazioni storiche." };
+    const currentCoach = valid[0].coach;
+    const current = valid.filter(item => item.coach.toLowerCase() === currentCoach.toLowerCase());
+    const previous = valid.filter(item => item.coach.toLowerCase() !== currentCoach.toLowerCase());
+    const avgDiff = rows => rows.length ? rows.reduce((sum,item)=>sum+item.scored-item.conceded,0)/rows.length : null;
+    const currentDiff = avgDiff(current);
+    const previousDiff = avgDiff(previous);
+    if (current.length < 3 || previous.length < 2 || previousDiff === null) {
+      return { team: side.name, coach: currentCoach, matches_under_current_coach: current.length,
+        matches_under_previous_coaches: previous.length, applied:false,
+        reason:"Servono almeno 3 partite con l'allenatore attuale e 2 con i precedenti." };
+    }
+    const delta = currentDiff - previousDiff;
+    const adjustment = Math.max(-0.03, Math.min(0.03, delta * 0.015));
+    return {
+      team: side.name, coach: currentCoach, matches_under_current_coach: current.length,
+      matches_under_previous_coaches: previous.length,
+      goal_difference_per_match_current: Number(currentDiff.toFixed(3)),
+      goal_difference_per_match_previous: Number(previousDiff.toFixed(3)),
+      observed_change: Number(delta.toFixed(3)),
+      adjustment_percent: Number((adjustment * 100).toFixed(2)),
+      applied: true,
+      reason: "Confronto descrittivo dei risultati con il tecnico attuale e i precedenti; effetto limitato a ±3%."
+    };
+  }));
+  result.home = teamResults[0];
+  result.away = teamResults[1];
+  result.applied = Boolean(result.home?.applied || result.away?.applied);
+  result.reason = result.applied
+    ? "Impatto allenatore applicato solo dove lo storico dei tecnici è sufficiente."
+    : "Impatto non applicato: campione insufficiente; Poisson invariato.";
+  return result;
+}
+
 app.get(
   "/api/fixture/:id/player-form",
   requireDatabase,
@@ -2269,8 +2391,15 @@ app.get(
         console.error("Modello statistiche avanzate non disponibile:", statsError.message);
       }
 
+      let coachImpact = null;
+      try {
+        coachImpact = await getCoachChangeImpact(fixture, history);
+      } catch (coachError) {
+        console.error("Impatto allenatore non disponibile:", coachError.message);
+      }
+
       const prediction = calculatePrediction(
-        fixture, history, lineupImpact, statisticalForecast
+        fixture, history, lineupImpact, statisticalForecast, coachImpact
       );
       if (!prediction.ok) {
         return res.status(422).json({
@@ -2301,6 +2430,7 @@ app.get(
             .map(([field]) => field)
         } : { available: false, reason: "Statistiche storiche non recuperabili in questa richiesta." },
         lineup_form_impact: lineupImpact,
+        coach_impact: coachImpact,
         player_form: playerForm ? { lineup_confirmed: playerForm.lineup_confirmed, lineup: playerForm.lineup, players: playerForm.players } : null,
 
         match: {
