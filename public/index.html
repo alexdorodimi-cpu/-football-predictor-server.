@@ -812,36 +812,32 @@ async function runOptimizerRobustness(){
  const leagueId=document.getElementById("league").value;
  const output=document.getElementById("optimizerResult");
  if(!leagueId||leagueId==="all"){output.textContent="Seleziona prima un campionato.";return;}
- output.textContent="🧪 Test di robustezza in corso: 250, 400 e 500 partite. Attendi...";
+ output.textContent="🧪 Test robustezza in corso: 250, 400 e 500 partite...";
  const runs=[];
- try{
-  for(const limit of [250,400,500]){
-   output.textContent="🧪 Test robustezza: analisi "+limit+" partite ("+runs.length+"/3 completati)...";
-   const result=await api("/api/model/optimizer/"+encodeURIComponent(leagueId)+"?limit="+limit);
-   runs.push({limit,result});
-  }
-  const markets=["1X2","over_1_5","over_2_5","over_3_5","btts"];
-  const lines=["🧪 TEST ROBUSTEZZA OTTIMIZZATORE","Campionato: "+leagueId,"Tre holdout cronologici di dimensione diversa: 250 / 400 / 500","⚠️ I test sono annidati e condividono parte dello storico: indicano stabilità, non tre campioni indipendenti.",""];
+ const markets=["1X2","over_1_5","over_2_5","over_3_5","btts"];
+ function render(){
+  const lines=["🧪 TEST ROBUSTEZZA OTTIMIZZATORE","Campionato: "+leagueId,"Holdout cronologici: 250 / 400 / 500","⚠️ I campioni sono annidati e non indipendenti.",""];
   for(const run of runs){
    const r=run.result;
    lines.push("━━━ HOLDOUT "+run.limit+" ━━━");
    lines.push("Train "+r.split.training_matches+" | Validation "+r.split.validation_matches+" | Test "+r.split.test_matches);
    lines.push("Config: finestra "+r.selected_config.window+" | decay "+r.selected_config.decay+" | venue "+r.selected_config.venue_blend);
-   for(const market of markets){
-    const m=r.test_comparison?.[market];if(!m)continue;
-    lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");
-   }
+   for(const market of markets){const m=r.test_comparison?.[market];if(!m)continue;lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");}
    lines.push("");
   }
-  const configs=runs.map(x=>x.result.selected_config);
-  const same=configs.every(c=>c.window===configs[0].window&&c.decay===configs[0].decay&&c.venue_blend===configs[0].venue_blend);
-  lines.push("STABILITÀ CONFIGURAZIONE: "+(same?"🟢 IDENTICA nei 3 test":"🟡 VARIA tra i test"));
-  lines.push("Configurazioni selezionate: "+configs.map(c=>"["+c.window+", "+c.decay+", "+c.venue_blend+"]").join(" | "));
-  lines.push("Non attiva alcuna configurazione in produzione.");
+  if(runs.length===3){const configs=runs.map(x=>x.result.selected_config);const same=configs.every(c=>c.window===configs[0].window&&c.decay===configs[0].decay&&c.venue_blend===configs[0].venue_blend);lines.push("STABILITÀ CONFIGURAZIONE: "+(same?"🟢 IDENTICA nei 3 test":"🟡 VARIA tra i test"));lines.push("Config selezionate: "+configs.map(c=>"["+c.window+", "+c.decay+", "+c.venue_blend+"]").join(" | "));lines.push("Nessuna configurazione attivata in produzione.");}
   output.textContent=lines.join("\n");
- }catch(error){output.textContent="Errore test robustezza: "+error.message+"\\nTest completati prima dell'errore: "+runs.length;}
+ }
+ for(const limit of [250,400,500]){
+  let result=null,lastError=null;
+  for(let attempt=1;attempt<=2&&!result;attempt++){
+   output.textContent="🧪 Test "+limit+" ("+runs.length+"/3 completati), tentativo "+attempt+"/2...";
+   try{result=await api("/api/model/optimizer/"+encodeURIComponent(leagueId)+"?limit="+limit);}catch(e){lastError=e;}
+  }
+  if(!result){render();output.textContent+="\n❌ Test "+limit+" non riuscito dopo 2 tentativi: "+(lastError?.message||"errore sconosciuto")+"\nI risultati già completati sono conservati.";return;}
+  runs.push({limit,result});render();
+ }
 }
-
 async function runMonthlyBacktest(){
  const leagueId=document.getElementById("league").value;
  const output=document.getElementById("backtestResult");
