@@ -802,7 +802,7 @@ async function runModelOptimizer(){
   }
   lines.push("","Configurazioni provate: "+(result.validation_configurations_tested??"—"));
   lines.push("⚠️ "+(result.warning||"Il test è diagnostico: non attiva automaticamente la configurazione."));
-  output.textContent=lines.join("\\n");
+  output.textContent=lines.join("\n");
  }catch(error){output.textContent="Errore optimizer: "+error.message;}
 }
 
