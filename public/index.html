@@ -366,6 +366,23 @@ button.full{width:100%}
 
  <div class="panel">
   <div class="panel-heading">
+   <h2>🧠 Ottimizzatore del modello</h2>
+   <small>Confronto cronologico senza leakage</small>
+  </div>
+  <p class="muted">Testa configurazioni diverse e confronta il modello attuale con quello selezionato. Il test finale resta separato dalla selezione.</p>
+  <label>Partite da valutare</label>
+  <select id="optimizerLimit">
+   <option value="100">100</option>
+   <option value="150">150</option>
+   <option value="250" selected>250</option>
+   <option value="400">400</option>
+  </select>
+  <button class="full" onclick="runModelOptimizer()">OTTIMIZZA E CONFRONTA</button>
+  <pre id="optimizerResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
+ </div>
+
+ <div class="panel">
+  <div class="panel-heading">
    <h2>🎯 Generatore Multiple AI</h2>
    <small>Bookmaker: Sisal · mercati standard</small>
   </div>
@@ -762,6 +779,31 @@ async function generateMultiples(){
   button.disabled=false;
   button.textContent="GENERA MULTIPLA";
  }
+}
+
+
+async function runModelOptimizer(){
+ const leagueId=document.getElementById("league").value;
+ const output=document.getElementById("optimizerResult");
+ const limit=document.getElementById("optimizerLimit").value;
+ if(!leagueId||leagueId==="all"){output.textContent="Seleziona prima un campionato.";return;}
+ output.textContent="🧠 Ottimizzazione in corso: recupero storico, validation e test finale...";
+ try{
+  const result=await api("/api/model/optimizer/"+encodeURIComponent(leagueId)+"?limit="+encodeURIComponent(limit));
+  const comparison=result.test_comparison||{};
+  const split=result.split||{};
+  const lines=["🧠 OTTIMIZZATORE MODELLO","Campionato: "+leagueId,"Partite storico: "+(split.history_matches??"—"),"Train: "+(split.training_matches??"—")+" | Validation: "+(split.validation_matches??"—")+" | Test: "+(split.test_matches??"—"),"","CONFIGURAZIONE SELEZIONATA (validation)","Finestra: "+result.selected_config?.window+" | Decay: "+result.selected_config?.decay+" | Peso casa/trasferta: "+result.selected_config?.venue_blend,"","CONFRONTO SUL TEST FINALE (mai usato per scegliere)"];
+  for(const market of ["1X2","over_1_5","over_2_5","over_3_5","btts"]){
+   const c=comparison[market];if(!c)continue;
+   lines.push(market+":");
+   lines.push("  Baseline accuracy: "+(c.baseline?.accuracy_percent??"—")+"% | Brier: "+(c.baseline?.brier??"—"));
+   lines.push("  Ottimizzato accuracy: "+(c.optimized?.accuracy_percent??"—")+"% | Brier: "+(c.optimized?.brier??"—"));
+   lines.push("  Delta accuracy: "+(c.accuracy_delta_pp>0?"+":"")+(c.accuracy_delta_pp??"—")+" pp | Delta Brier: "+(c.brier_delta>0?"+":"")+(c.brier_delta??"—"));
+  }
+  lines.push("","Configurazioni provate: "+(result.validation_configurations_tested??"—"));
+  lines.push("⚠️ "+(result.warning||"Il test è diagnostico: non attiva automaticamente la configurazione."));
+  output.textContent=lines.join("\\n");
+ }catch(error){output.textContent="Errore optimizer: "+error.message;}
 }
 
 async function runMonthlyBacktest(){
