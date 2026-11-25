@@ -5328,8 +5328,8 @@ async function runAutomaticStatisticsSync() {
     // prosegue a blocchi anche sulle stagioni precedenti, fino al 2021.
     const priorityQueries = [
       baseQuery().eq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE),
-      baseQuery().neq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
-      baseQuery().neq("season", currentSeason).limit(100)
+      baseQuery().neq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE),
+      baseQuery().neq("season", currentSeason).limit(AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE)
     ];
     const selectedById = new Map();
     for (const query of priorityQueries) {
