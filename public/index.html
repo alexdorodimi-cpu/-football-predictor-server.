@@ -768,7 +768,7 @@ async function runMonthlyBacktest(){
  const leagueId=document.getElementById("league").value;
  const output=document.getElementById("backtestResult");
  if(!leagueId||leagueId==="all"){
-  output.textContent="Seleziona prima Serie A nel campo Campionato.";
+  output.textContent="Seleziona prima un campionato.";
   return;
  }
  const end=new Date();
@@ -777,15 +777,43 @@ async function runMonthlyBacktest(){
  start.setUTCDate(start.getUTCDate()-29);
  const from=start.toISOString().slice(0,10);
  const to=end.toISOString().slice(0,10);
- const year=end.getUTCFullYear();
- const season=end.getUTCMonth()>=6?year+"/"+(year+1):(year-1)+"/"+year;
- output.textContent="Backtest ultimi 30 giorni ("+from+" → "+to+") in corso...";
+ output.textContent="Backtest 30 giorni ("+from+" → "+to+") in corso...";
  try{
   const url="/api/backtest/"+encodeURIComponent(leagueId)+
    "?from="+encodeURIComponent(from)+"&to="+encodeURIComponent(to)+
-   "&season="+encodeURIComponent(season)+"&limit=100";
+   "&summary=true&limit=100";
   const result=await api(url);
-  output.textContent=JSON.stringify(result,null,2);
+  if(!result||result.ok!==true) throw new Error(result?.error||"Risposta backtest non valida");
+  const markets=result.accuracy_by_market||{};
+  const lines=[
+   "📊 BACKTEST — ULTIMI 30 GIORNI",
+   "Periodo: "+from+" → "+to,
+   "Partite valutate: "+(result.evaluated_matches??0),
+   "",
+   "⚽ 1X2"
+  ];
+  for(const key of ["1","X","2"]){
+   const m=markets[key];
+   if(m) lines.push(key+": "+(m.accuracy??"N/D")+"% ("+(m.correct??0)+"/"+(m.evaluated??0)+")");
+  }
+  lines.push("","🎯 MERCATI GOAL");
+  for(const key of ["over_1_5","over_2_5","over_3_5","btts"]){
+   const m=markets[key];
+   if(m) lines.push(key.replaceAll("_"," ").toUpperCase()+": "+(m.accuracy??"N/D")+"% ("+(m.correct??0)+"/"+(m.evaluated??0)+")");
+  }
+  const adv=result.advanced_metrics||{};
+  if(adv["1X2"]?.log_loss!=null) lines.push("","Log Loss 1X2: "+adv["1X2"].log_loss+" (più basso è meglio)");
+  if(adv.expected_goals_error?.home_mae!=null){
+   lines.push("Errore medio gol casa: "+adv.expected_goals_error.home_mae);
+   lines.push("Errore medio gol trasferta: "+adv.expected_goals_error.away_mae);
+  }
+  const entries=Object.entries(markets).filter(([k,v])=>!["1","X","2"].includes(k)&&v?.accuracy!=null&&v.evaluated>0);
+  if(entries.length){
+   entries.sort((a,b)=>b[1].accuracy-a[1].accuracy);
+   lines.push("","🏆 MERCATO MIGLIORE: "+entries[0][0]+" — "+entries[0][1].accuracy+"%");
+   lines.push("⚠️ MERCATO PEGGIORE: "+entries[entries.length-1][0]+" — "+entries[entries.length-1][1].accuracy+"%");
+  }
+  output.textContent=lines.join("\\n");
  }catch(error){
   output.textContent="Errore backtest: "+error.message;
  }
