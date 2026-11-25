@@ -5153,6 +5153,66 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
 
 
 // ==========================================
+ // OTTIMIZZATORE SPERIMENTALE MODELLI (read-only)
+ // Confronta configurazioni Poisson con valutazione temporale senza leakage.
+ app.get("/api/model/optimizer/:leagueId", requireSportApi, requireDatabase, async (req, res) => {
+   try {
+     const leagueId = String(req.params.leagueId);
+     if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) return res.status(400).json({ ok:false, error:"ID campionato non valido." });
+     const allowed = await getEuropeanLeagueCatalog();
+     if (!allowed.some(item => String(item.id) === leagueId)) return res.status(404).json({ ok:false, error:"Campionato non ammesso." });
+     const limit = Math.min(Math.max(Number(req.query.limit) || 250, 50), 500);
+     const { data, error } = await supabase.from("matches").select("*").eq("league_id", leagueId)
+       .not("home_goals","is",null).not("away_goals","is",null).order("match_date",{ascending:false}).limit(5000);
+     if (error) throw error;
+     const history=(data||[]).filter(m=>isFinished(m)&&m.match_date&&getNumber(m.home_goals)!==null&&getNumber(m.away_goals)!==null)
+       .sort((a,b)=>new Date(a.match_date)-new Date(b.match_date));
+     const evaluation=history.slice(-limit);
+     const configs=[];
+     for (const windowSize of [5,10,15,20]) for (const decay of [0.65,0.75,0.85,1]) for (const venueBlend of [0.3,0.5,0.7]) configs.push({window:windowSize,decay,venue_blend:venueBlend});
+     function weighted(vals, decay) { if(!vals.length)return null; let sum=0,w=0; vals.forEach((v,i)=>{const wi=Math.pow(decay,i);sum+=v*wi;w+=wi;});return w?sum/w:null; }
+     function teamSamples(team,date,venue) {
+       return history.filter(m=>new Date(m.match_date)<new Date(date)&&((venue==="home" ? String(m.home_team).toLowerCase()===team.toLowerCase():venue==="away"?String(m.away_team).toLowerCase()===team.toLowerCase():String(m.home_team).toLowerCase()===team.toLowerCase()||String(m.away_team).toLowerCase()===team.toLowerCase())))
+       .sort((a,b)=>new Date(b.match_date)-new Date(a.match_date)).map(m=>{const h=String(m.home_team).toLowerCase()===team.toLowerCase();return {for:Number(h?m.home_goals:m.away_goals),against:Number(h?m.away_goals:m.home_goals)};});
+     }
+     function poisson(l,k){if(l<=0)return k===0?1:0;let fac=1;for(let z=2;z<=k;z++)fac*=z;return Math.exp(-l)*Math.pow(l,k)/fac;}
+     function probs(lh,la){let matrix=[],sum=0;for(let h=0;h<=8;h++)for(let a=0;a<=8;a++){let v=poisson(lh,h)*poisson(la,a);matrix.push({h,a,v});sum+=v;}return matrix.map(x=>({...x,v:x.v/sum}));}
+     const metrics={};
+     for(const cfg of configs){const key=`w${cfg.window}_d${cfg.decay}_v${cfg.venue_blend}`;metrics[key]={config:cfg,markets:{}};}
+     const marketNames=["1","X","2","over_1_5","over_2_5","over_3_5","btts"];
+     for(const match of evaluation){
+       const date=match.match_date,home=match.home_team,away=match.away_team;
+       const prior=history.filter(m=>new Date(m.match_date)<new Date(date)).slice(-300);
+       if(prior.length<30)continue;
+       const lha=prior.reduce((s,m)=>s+Number(m.home_goals),0)/prior.length,laa=prior.reduce((s,m)=>s+Number(m.away_goals),0)/prior.length;
+       const hAll=teamSamples(home,date,"all"),aAll=teamSamples(away,date,"all"),hVenue=teamSamples(home,date,"home"),aVenue=teamSamples(away,date,"away");
+       const actualH=Number(match.home_goals),actualA=Number(match.away_goals),total=actualH+actualA;
+       const actual={ "1":actualH>actualA,"X":actualH===actualA,"2":actualH<actualA,over_1_5:total>=2,over_2_5:total>=3,over_3_5:total>=4,btts:actualH>0&&actualA>0};
+       for(const cfg of configs){
+         const key=`w${cfg.window}_d${cfg.decay}_v${cfg.venue_blend}`,m=metrics[key];
+         const h=hAll.slice(0,cfg.window),a=aAll.slice(0,cfg.window),hv=hVenue.slice(0,5),av=aVenue.slice(0,5);
+         if(h.length<5||a.length<5)continue;
+         const hFor=weighted(h.map(x=>x.for),cfg.decay),hAgainst=weighted(h.map(x=>x.against),cfg.decay),aFor=weighted(a.map(x=>x.for),cfg.decay),aAgainst=weighted(a.map(x=>x.against),cfg.decay);
+         const hVf=hv.length>=3?weighted(hv.map(x=>x.for),cfg.decay):hFor,hVa=hv.length>=3?weighted(hv.map(x=>x.against),cfg.decay):hAgainst;
+         const aVf=av.length>=3?weighted(av.map(x=>x.for),cfg.decay):aFor,aVa=av.length>=3?weighted(av.map(x=>x.against),cfg.decay):aAgainst;
+         const shrink=(v,prior,n)=>(v*n+prior*3)/(n+3);
+         const ha=shrink(hFor,lha,h.length),hd=shrink(hAgainst,laa,h.length),aa=shrink(aFor,laa,a.length),ad=shrink(aAgainst,lha,a.length);
+         const hvf=shrink(hVf,ha,hv.length),hva=shrink(hVa,hd,hv.length),avf=shrink(aVf,aa,av.length),ava=shrink(aVa,ad,av.length);
+         const overallH=lha*(ha/lha)*(ad/laa),overallA=laa*(aa/laa)*(hd/lha);
+         const venueH=lha*(hvf/lha)*(ava/laa),venueA=laa*(avf/laa)*(hva/lha);
+         const blend=cfg.venue_blend;
+         const lh=Math.max(.1,Math.min(4.5,(1-blend)*overallH+blend*venueH)),la=Math.max(.1,Math.min(4.5,(1-blend)*overallA+blend*venueA));
+         const matrix=probs(lh,la);let p={ "1":0,"X":0,"2":0,over_1_5:0,over_2_5:0,over_3_5:0,btts:0};
+         for(const x of matrix){if(x.h>x.a)p["1"]+=x.v;else if(x.h===x.a)p.X+=x.v;else p["2"]+=x.v;if(x.h+x.a>=2)p.over_1_5+=x.v;if(x.h+x.a>=3)p.over_2_5+=x.v;if(x.h+x.a>=4)p.over_3_5+=x.v;if(x.h>0&&x.a>0)p.btts+=x.v;}
+         for(const market of marketNames){const arr=m.markets[market]||(m.markets[market]=[]);arr.push({p:p[market],y:actual[market]});}
+       }
+     }
+     const results=Object.entries(metrics).map(([id,m])=>{const marketResults={};let scoreSum=0,scoreCount=0;for(const [market,rows] of Object.entries(m.markets)){if(!rows.length)continue;const acc=rows.filter(r=>(r.p>=.5)===r.y).length/rows.length,brier=rows.reduce((s,r)=>s+Math.pow(r.p-(r.y?1:0),2),0)/rows.length,logloss=rows.reduce((s,r)=>s-r.y*Math.log(Math.max(1e-6,r.p))-(1-r.y)*Math.log(Math.max(1e-6,1-r.p)),0)/rows.length;marketResults[market]={n:rows.length,accuracy_percent:Number((acc*100).toFixed(2)),brier:Number(brier.toFixed(4)),log_loss:Number(logloss.toFixed(4)),mean_probability_percent:Number((rows.reduce((s,r)=>s+r.p,0)/rows.length*100).toFixed(2)),actual_rate_percent:Number((rows.filter(r=>r.y).length/rows.length*100).toFixed(2))};scoreSum+=brier;scoreCount++;}return {id,config:m.config,markets:marketResults,mean_brier:scoreCount?Number((scoreSum/scoreCount).toFixed(4)):null};}).sort((a,b)=>(a.mean_brier??99)-(b.mean_brier??99));
+     res.json({ok:true,optimizer:"Poisson parameter grid search; strictly pre-match history",league_id:leagueId,history_matches:history.length,evaluation_matches_requested:limit,evaluation_matches_available:evaluation.length,configurations_tested:configs.length,ranking_metric:"Mean Brier score across markets (lower is better)",top_10:results.slice(0,10),current_reference:results.find(r=>r.config.window===10&&r.config.decay===0.75&&r.config.venue_blend===0.7)||null,all_results:results,warning:"Exploratory optimization on the selected historical window; verify finalists on a separate untouched season before changing production settings."});
+   }catch(error){handleError(res,error);}
+ });
+ 
+// ==========================================
 // ROTTA NON TROVATA
 // ==========================================
 
