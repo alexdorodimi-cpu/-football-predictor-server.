@@ -5196,7 +5196,7 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
     const comparisons={};for(const m of Object.keys(selectedScore))comparisons[m]={baseline:baseScore[m]||null,optimized:selectedScore[m]||null,brier_delta:selectedScore[m]&&baseScore[m]?+(selectedScore[m].brier-baseScore[m].brier).toFixed(4):null,accuracy_delta_pp:selectedScore[m]&&baseScore[m]?+(selectedScore[m].accuracy_percent-baseScore[m].accuracy_percent).toFixed(2):null};
     res.json({ok:true,optimizer:"V3 chronological train-validation-test; untouched holdout; strict pre-match history",league_id:leagueId,split:{history_matches:history.length,training_matches:training.length,validation_matches:validation.length,test_matches:test.length,training_dates:training.length?[training[0].match_date,training.at(-1).match_date]:null,validation_dates:[validation[0].match_date,validation.at(-1).match_date],test_dates:[test[0].match_date,test.at(-1).match_date]},selected_config:selected,selected_validation:valResults[0],validation_top_10:valResults.slice(0,10),baseline_config:baseline,baseline_test:baseScore,selected_test:selectedScore,test_comparison:comparisons,validation_configurations_tested:configs.length,warning:"Configurazione selezionata esclusivamente sulla validation. Test cronologico non usato per selezione; nessuna modifica al modello produzione. ROI non calcolabile senza quote storiche affidabili."});
   }catch(error){handleError(res,error);}
-}););;
+});
  
 // ==========================================
 // ROTTA NON TROVATA
