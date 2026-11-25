@@ -601,21 +601,17 @@ async function saveMatchesToDatabase(
     return 0;
   }
 
-  // Arricchisce il nome dal catalogo PitchAPI prima dell'upsert.
-  // Se il catalogo non conosce l'ID, league_name resta undefined e viene
-  // omesso dal payload: mai cancellare un nome già presente con null.
+  // Il catalogo PitchAPI è l'unica fonte canonica per ID e nomi dei campionati.
+  // Ogni riga deve essere risolta prima dell'upsert: un ID sconosciuto blocca
+  // l'intero salvataggio, anche se la fixture contiene un nome, per evitare
+  // di introdurre campionati non verificati o nomi incoerenti nel database.
   const namesById = await getLeagueNameMap();
   for (const row of rows) {
     const catalogName = namesById.get(String(row.league_id));
-    if (catalogName) {
-      // Il catalogo è la fonte canonica: sovrascrive anche eventuali nomi
-      // obsoleti restituiti dalla fixture e impedisce upsert con nomi vuoti.
-      row.league_name = catalogName;
-    } else if (!row.league_name) {
-      // Non salvare una partita priva di nome se l'ID non è nel catalogo:
-      // evita che un upsert trasformi un nome esistente in NULL.
-      throw new Error("Nome campionato non risolvibile per league_id " + row.league_id + ". Upsert annullato per sicurezza.");
+    if (!catalogName) {
+      throw new Error("Campionato non presente nel catalogo PitchAPI per league_id " + row.league_id + ". Upsert annullato per sicurezza.");
     }
+    row.league_name = catalogName;
   }
 
   const { error } = await supabase
