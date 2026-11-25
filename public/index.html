@@ -380,6 +380,7 @@ button.full{width:100%}
   </select>
   <button class="full" onclick="runModelOptimizer()">OTTIMIZZA E CONFRONTA</button>
   <button class="full secondary" onclick="runOptimizerRobustness()">TEST ROBUSTEZZA (250 / 400 / 500)</button>
+  <button class="full secondary" onclick="runCrossLeagueCandidate()">TEST CONFIGURAZIONE CANDIDATA SU SERIE A + PREMIER</button>
   <pre id="optimizerResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
  </div>
 
@@ -838,6 +839,17 @@ async function runOptimizerRobustness(){
   runs.push({limit,result});render();
  }
 }
+async function runCrossLeagueCandidate(){
+ const select=document.getElementById("league");const output=document.getElementById("optimizerResult");
+ const options=[...select.options];const serie=options.find(o=>/serie a/i.test(o.text));const premier=options.find(o=>/premier league/i.test(o.text));
+ if(!serie||!premier){output.textContent="Non trovo Serie A e Premier League nel catalogo. Premi prima TEST SERVER per caricare i campionati.";return;}
+ output.textContent="🔬 Test configurazione candidata (25 / 1 / 0.1) su Serie A e Premier League...";const runs=[];
+ for(const league of [serie,premier]){try{const result=await api("/api/model/optimizer/"+encodeURIComponent(league.value)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1");runs.push({name:league.text,result});}catch(e){output.textContent="Errore sul campionato "+league.text+": "+e.message+"\nRisultati completati: "+runs.length;return;}output.textContent="Campionati completati: "+runs.length+"/2...";}
+ const markets=["1X2","over_1_5","over_2_5","over_3_5","btts"];const lines=["🔬 TEST CANDIDATO CROSS-LEAGUE","Configurazione fissa: finestra 25 | decay 1 | venue 0.1","Holdout cronologico 250 per ciascun campionato.","⚠️ Test diagnostico: nessuna attivazione in produzione.",""];
+ for(const run of runs){const r=run.result;lines.push("━━ "+run.name+" ━━");lines.push("Storico "+r.split.history_matches+" | Train "+r.split.training_matches+" | Validation "+r.split.validation_matches+" | Test "+r.split.test_matches);for(const market of markets){const m=r.test_comparison?.[market];if(m)lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");}lines.push("");}
+ output.textContent=lines.join("\n");
+}
+
 async function runMonthlyBacktest(){
  const leagueId=document.getElementById("league").value;
  const output=document.getElementById("backtestResult");
