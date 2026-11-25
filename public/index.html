@@ -381,6 +381,7 @@ button.full{width:100%}
   <button class="full" onclick="runModelOptimizer()">OTTIMIZZA E CONFRONTA</button>
   <button class="full secondary" onclick="runOptimizerRobustness()">TEST ROBUSTEZZA (250 / 400 / 500)</button>
   <button class="full secondary" onclick="runCrossLeagueCandidate()">TEST CONFIGURAZIONE CANDIDATA SU SERIE A + PREMIER</button>
+  <button class="full secondary" onclick="runLaLigaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LA LIGA</button>
   <pre id="optimizerResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
  </div>
 
@@ -872,6 +873,31 @@ async function runCrossLeagueCandidate(){
  document.removeEventListener("visibilitychange",keepAwake);
  try{if(wakeLock)await wakeLock.release();}catch(e){}
  output.textContent+="\n✅ TEST COMPLETATO: entrambi i campionati.";
+}
+
+async function runLaLigaCandidate(){
+ const select=document.getElementById("league"),output=document.getElementById("optimizerResult");
+ const league=[...select.options].find(o=>/la liga/i.test(o.text));
+ if(!league){output.textContent="La Liga non trovata nel catalogo. Premi prima TEST SERVER per aggiornare i campionati.";return;}
+ const key="predictor_candidate_laliga_2026";
+ let saved=null;try{saved=JSON.parse(localStorage.getItem(key)||"null");}catch(e){}
+ if(saved?.result){output.textContent=saved.text+"\n\nRisultato recuperato dal salvataggio locale. Per rifare il test, cancella il salvataggio locale della pagina.";return;}
+ let wakeLock=null;
+ async function awake(){try{if("wakeLock" in navigator&&document.visibilityState==="visible")wakeLock=await navigator.wakeLock.request("screen");}catch(e){}}
+ const vis=()=>awake();document.addEventListener("visibilitychange",vis);
+ const markets=["1X2","over_0_5","under_0_5","over_1_5","under_1_5","over_2_5","under_2_5","over_3_5","under_3_5","over_4_5","under_4_5","btts"];
+ let result=null,lastError=null;
+ for(let attempt=1;attempt<=4&&!result;attempt++){
+  output.textContent="🧪 Validazione La Liga — configurazione 25 / 1 / 0.1. Tentativo "+attempt+"/4...";
+  try{await awake();result=await api("/api/model/optimizer/"+encodeURIComponent(league.value)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1");}
+  catch(e){lastError=e;if(attempt<4)await new Promise(r=>setTimeout(r,1500*attempt));}
+ }
+ if(!result){output.textContent="❌ La Liga non riuscita dopo 4 tentativi: "+(lastError?.message||"errore")+"\nPuoi rilanciare il test.";document.removeEventListener("visibilitychange",vis);try{if(wakeLock)await wakeLock.release();}catch(e){}return;}
+ const r=result,lines=["🧪 VALIDAZIONE CONFIGURAZIONE SU LA LIGA","Config fissa: finestra 25 | decay 1 | venue 0.1","Holdout cronologico: 250","Storico "+r.split.history_matches+" | Train "+r.split.training_matches+" | Validation "+r.split.validation_matches+" | Test "+r.split.test_matches,"⚠️ Test diagnostico, non attiva la configurazione.",""];
+ for(const market of markets){const m=r.test_comparison?.[market];if(m)lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");}
+ const textResult=lines.join("\n");try{localStorage.setItem(key,JSON.stringify({result:r,text:textResult,config:"25/1/0.1"}));}catch(e){}
+ output.textContent=textResult+"\n\n✅ TEST LA LIGA COMPLETATO E SALVATO.";
+ document.removeEventListener("visibilitychange",vis);try{if(wakeLock)await wakeLock.release();}catch(e){}
 }
 
 async function runMonthlyBacktest(){
