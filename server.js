@@ -5202,6 +5202,58 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
   }catch(error){handleError(res,error);}
 });
  
+
+// ==========================================
+// VALIDAZIONE MULTI-CAMPIONATO IN BACKGROUND
+// Job singleton: esecuzione sequenziale, retry, stato e risultati in memoria.
+// ==========================================
+let multiLeagueJob = null;
+async function runMultiLeagueJob(job) {
+  job.status = "running";
+  const catalog = await getEuropeanLeagueCatalog();
+  const leagues = catalog.filter(x => x && x.id && x.name && !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)));
+  job.leagues = leagues.map(x => ({id:String(x.id),name:String(x.name)}));
+  job.total = leagues.length;
+  for (const league of leagues) {
+    if (job.completed.some(x => x.league_id === String(league.id))) continue;
+    job.current = league.name;
+    let result = null, error = null;
+    for (let attempt=1; attempt<=4 && !result; attempt++) {
+      job.attempt = attempt;
+      try {
+        const url = "http://127.0.0.1:"+PORT+"/api/model/optimizer/"+encodeURIComponent(league.id)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1";
+        const response = await fetch(url,{headers:{Authorization:"Bearer "+ACCESS_TOKEN}});
+        const body = await response.json();
+        if (!response.ok || body?.ok !== true) throw new Error(body?.error || "HTTP "+response.status);
+        result = body;
+      } catch(e) {
+        error = e;
+        if (attempt < 4) await new Promise(r=>setTimeout(r,1500*attempt));
+      }
+    }
+    if (result) job.completed.push({league_id:String(league.id),league_name:String(league.name),result,completed_at:new Date().toISOString()});
+    else job.failed.push({league_id:String(league.id),league_name:String(league.name),error:error?.message||"Errore sconosciuto"});
+    job.processed = job.completed.length + job.failed.length;
+    job.updated_at = new Date().toISOString();
+    // Pausa per rispettare il rate limit globale delle API.
+    await new Promise(r=>setTimeout(r,1200));
+  }
+  job.current = null;
+  job.status = job.failed.length ? "completed_with_errors" : "completed";
+  job.finished_at = new Date().toISOString();
+  job.updated_at = job.finished_at;
+}
+app.post("/api/model/optimizer/batch/start", requireAccess, requireSportApi, requireDatabase, async (req,res)=>{
+  if (multiLeagueJob && ["queued","running"].includes(multiLeagueJob.status)) return res.json({ok:true,message:"Job già attivo.",job:multiLeagueJob});
+  multiLeagueJob={id:"mlv-"+Date.now(),status:"queued",config:{window:25,decay:1,venue_blend:0.1},holdout:250,total:0,processed:0,current:null,attempt:0,completed:[],failed:[],started_at:new Date().toISOString(),updated_at:new Date().toISOString()};
+  runMultiLeagueJob(multiLeagueJob).catch(e=>{multiLeagueJob.status="failed";multiLeagueJob.error=e?.message||String(e);multiLeagueJob.finished_at=new Date().toISOString();});
+  res.json({ok:true,message:"Validazione multi-campionato avviata in background.",job_id:multiLeagueJob.id});
+});
+app.get("/api/model/optimizer/batch/status", requireAccess, requireDatabase, (req,res)=>{
+  if(!multiLeagueJob) return res.json({ok:true,job:null,message:"Nessun job avviato in questo processo server."});
+  res.json({ok:true,job:multiLeagueJob});
+});
+
 // ==========================================
 // ROTTA NON TROVATA
 // ==========================================
