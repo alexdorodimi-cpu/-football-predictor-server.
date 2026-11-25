@@ -838,7 +838,7 @@ async function runOptimizerRobustness(){
   lines.push("STABILITÀ CONFIGURAZIONE: "+(same?"🟢 IDENTICA nei 3 test":"🟡 VARIA tra i test"));
   lines.push("Configurazioni selezionate: "+configs.map(c=>"["+c.window+", "+c.decay+", "+c.venue_blend+"]").join(" | "));
   lines.push("Non attiva alcuna configurazione in produzione.");
-  output.textContent=lines.join("\\n");
+  output.textContent=lines.join("\n");
  }catch(error){output.textContent="Errore test robustezza: "+error.message+"\\nTest completati prima dell'errore: "+runs.length;}
 }
 
