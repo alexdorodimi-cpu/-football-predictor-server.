@@ -384,6 +384,7 @@ button.full{width:100%}
   <button class="full secondary" onclick="runLaLigaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LA LIGA</button>
   <button class="full secondary" onclick="runBundesligaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU BUNDESLIGA</button>
   <button class="full secondary" onclick="runLigue1Candidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LIGUE 1</button>
+  <button class="full secondary" onclick="startMultiLeagueValidation()">AVVIA VALIDAZIONE AUTOMATICA MULTI-CAMPIONATO</button>
   <pre id="optimizerResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
  </div>
 
@@ -942,6 +943,34 @@ async function runLigue1Candidate(){
  const report=lines.join("\n");try{localStorage.setItem(key,JSON.stringify({result:r,text:report,config:"25/1/0.1"}));}catch(e){}
  output.textContent=report+"\n\n✅ TEST LIGUE 1 COMPLETATO E SALVATO.";
  document.removeEventListener("visibilitychange",visibility);try{if(wakeLock)await wakeLock.release();}catch(e){}
+}
+
+
+async function startMultiLeagueValidation(){
+ const out=document.getElementById("optimizerResult");
+ out.textContent="Avvio job di validazione multi-campionato...";
+ try{
+  const token=localStorage.getItem("predictor_token");
+  if(!token)throw new Error("Inserisci prima il token di accesso.");
+  const response=await fetch("/api/model/optimizer/batch/start",{method:"POST",headers:{Authorization:"Bearer "+token}});
+  const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||"Avvio non riuscito");
+  out.textContent="Job avviato. ID: "+(data.job_id||data.job?.id||"")+"\nMonitoraggio in corso..."; 
+  let pollCount=0;
+  async function poll(){
+   const r=await fetch("/api/model/optimizer/batch/status",{headers:{Authorization:"Bearer "+token}});
+   const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||"Errore stato job");
+   const j=d.job;if(!j){out.textContent="Nessun job presente.";return;}
+   const lines=["🧪 VALIDAZIONE AUTOMATICA MULTI-CAMPIONATO","Configurazione: window 25 | decay 1 | venue 0.1 | holdout 250","Stato: "+j.status,"Progressi: "+(j.processed||0)+"/"+(j.total||"?"),"Campionato attuale: "+(j.current||"—"),"Completati: "+(j.completed?.length||0),"Falliti: "+(j.failed?.length||0),"","Risultati salvati nel browser durante il monitoraggio."];
+   for(const x of (j.completed||[])){const t=x.result?.test_comparison||{};lines.push("\n"+x.league_name+" ["+x.league_id+"]");for(const m of ["1X2","over_1_5","over_2_5","over_3_5","over_4_5","btts"]){const z=t[m];if(z)lines.push(m+": Acc "+z.baseline.accuracy_percent+"% → "+z.optimized.accuracy_percent+"% ("+z.accuracy_delta_pp+" pp) | Brier "+z.baseline.brier+" → "+z.optimized.brier+" ("+z.brier_delta+")");}
+   }
+   if(j.failed?.length){lines.push("\n❌ Errori:");for(const x of j.failed)lines.push(x.league_name+": "+x.error);}
+   out.textContent=lines.join("\n");
+   try{localStorage.setItem("predictor_multileague_candidate_25_1_01",JSON.stringify(j));}catch(e){}
+   if(["completed","completed_with_errors","failed"].includes(j.status)){out.textContent+="\n\n🏁 JOB TERMINATO.";return;}
+   pollCount++;setTimeout(poll,5000);
+  }
+  poll();
+ }catch(e){out.textContent="Errore avvio/monitoraggio: "+e.message;}
 }
 
 async function runMonthlyBacktest(){
