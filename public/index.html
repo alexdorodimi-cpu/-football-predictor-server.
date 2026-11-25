@@ -813,7 +813,7 @@ async function runMonthlyBacktest(){
    lines.push("","🏆 MERCATO MIGLIORE: "+entries[0][0]+" — "+entries[0][1].accuracy+"%");
    lines.push("⚠️ MERCATO PEGGIORE: "+entries[entries.length-1][0]+" — "+entries[entries.length-1][1].accuracy+"%");
   }
-  output.textContent=lines.join("\\n");
+  output.textContent=lines.join("\n");
  }catch(error){
   output.textContent="Errore backtest: "+error.message;
  }
