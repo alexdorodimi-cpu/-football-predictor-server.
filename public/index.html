@@ -877,8 +877,9 @@ async function runCrossLeagueCandidate(){
 
 async function runLaLigaCandidate(){
  const select=document.getElementById("league"),output=document.getElementById("optimizerResult");
- const league=[...select.options].find(o=>/la liga/i.test(o.text));
- if(!league){output.textContent="La Liga non trovata nel catalogo. Premi prima TEST SERVER per aggiornare i campionati.";return;}
+ const options=[...select.options];
+ const league=options.find(o=>/la liga|laliga|primera division|primera división|spanish league/i.test(o.text))||options.find(o=>/spain|españa|\(es\)/i.test(o.text)&&/division|liga|league|primera/i.test(o.text)&&!/cup|copa|women|femenina/i.test(o.text));
+ if(!league){const spanish=options.filter(o=>/spain|españa|\(es\)/i.test(o.text)).map(o=>o.text);output.textContent="La Liga non identificata nel catalogo. Campionati spagnoli disponibili: "+(spanish.join(" | ")||"nessuno rilevato")+" .";return;}
  const key="predictor_candidate_laliga_2026";
  let saved=null;try{saved=JSON.parse(localStorage.getItem(key)||"null");}catch(e){}
  if(saved?.result){output.textContent=saved.text+"\n\nRisultato recuperato dal salvataggio locale. Per rifare il test, cancella il salvataggio locale della pagina.";return;}
