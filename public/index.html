@@ -383,6 +383,7 @@ button.full{width:100%}
   <button class="full secondary" onclick="runCrossLeagueCandidate()">TEST CONFIGURAZIONE CANDIDATA SU SERIE A + PREMIER</button>
   <button class="full secondary" onclick="runLaLigaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LA LIGA</button>
   <button class="full secondary" onclick="runBundesligaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU BUNDESLIGA</button>
+  <button class="full secondary" onclick="runLigue1Candidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LIGUE 1</button>
   <pre id="optimizerResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
  </div>
 
@@ -919,6 +920,27 @@ async function runBundesligaCandidate(){
  for(const market of markets){const m=r.test_comparison?.[market];if(m)lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");}
  const report=lines.join("\n");try{localStorage.setItem(key,JSON.stringify({result:r,text:report,config:"25/1/0.1"}));}catch(e){}
  output.textContent=report+"\n\n✅ TEST BUNDESLIGA COMPLETATO E SALVATO.";
+ document.removeEventListener("visibilitychange",visibility);try{if(wakeLock)await wakeLock.release();}catch(e){}
+}
+
+
+async function runLigue1Candidate(){
+ const select=document.getElementById("league"),output=document.getElementById("optimizerResult");
+ const options=[...select.options];
+ const league=options.find(o=>/ligue 1|league 1|championnat national.*1/i.test(o.text))||options.find(o=>/france|\(fr\)/i.test(o.text)&&/liga|league|division|championnat/i.test(o.text)&&!/cup|coupe|women|feminine/i.test(o.text));
+ if(!league){const matches=options.filter(o=>/france|\(fr\)/i.test(o.text)).map(o=>o.text);output.textContent="Ligue 1 non identificata. Campionati francesi disponibili: "+(matches.join(" | ")||"nessuno rilevato");return;}
+ const key="predictor_candidate_ligue1_2026";
+ try{const saved=JSON.parse(localStorage.getItem(key)||"null");if(saved?.text){output.textContent=saved.text+"\n\nRisultato recuperato dal salvataggio locale.";return;}}catch(e){}
+ let wakeLock=null;async function awake(){try{if("wakeLock"in navigator&&document.visibilityState==="visible")wakeLock=await navigator.wakeLock.request("screen");}catch(e){}}
+ const visibility=()=>awake();document.addEventListener("visibilitychange",visibility);
+ const markets=["1X2","over_0_5","under_0_5","over_1_5","under_1_5","over_2_5","under_2_5","over_3_5","under_3_5","over_4_5","under_4_5","btts"];
+ let result=null,lastError=null;
+ for(let attempt=1;attempt<=4&&!result;attempt++){output.textContent="🧪 Validazione Ligue 1 — 25 / 1 / 0.1 — tentativo "+attempt+"/4";try{await awake();result=await api("/api/model/optimizer/"+encodeURIComponent(league.value)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1");}catch(e){lastError=e;if(attempt<4)await new Promise(r=>setTimeout(r,1500*attempt));}}
+ if(!result){output.textContent="❌ Test Ligue 1 fallito dopo 4 tentativi: "+(lastError?.message||"errore")+"\nRiprova quando il server è disponibile.";document.removeEventListener("visibilitychange",visibility);try{if(wakeLock)await wakeLock.release();}catch(e){}return;}
+ const r=result,lines=["🧪 VALIDAZIONE CONFIGURAZIONE SU LIGUE 1","Config fissa: finestra 25 | decay 1 | venue 0.1","Holdout cronologico: 250","Storico "+r.split.history_matches+" | Train "+r.split.training_matches+" | Validation "+r.split.validation_matches+" | Test "+r.split.test_matches,"⚠️ Test diagnostico, non attiva la configurazione.",""];
+ for(const market of markets){const m=r.test_comparison?.[market];if(m)lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");}
+ const report=lines.join("\n");try{localStorage.setItem(key,JSON.stringify({result:r,text:report,config:"25/1/0.1"}));}catch(e){}
+ output.textContent=report+"\n\n✅ TEST LIGUE 1 COMPLETATO E SALVATO.";
  document.removeEventListener("visibilitychange",visibility);try{if(wakeLock)await wakeLock.release();}catch(e){}
 }
 
