@@ -5157,88 +5157,46 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
  // Confronta configurazioni Poisson con valutazione temporale senza leakage.
  app.get("/api/model/optimizer/:leagueId", requireSportApi, requireDatabase, async (req, res) => {
   try {
-    const leagueId = String(req.params.leagueId);
-    if (!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) return res.status(400).json({ ok:false, error:"ID campionato non valido." });
-    const allowed = await getEuropeanLeagueCatalog();
-    if (!allowed.some(item => String(item.id) === leagueId)) return res.status(404).json({ ok:false, error:"Campionato non ammesso." });
-    const limit = Math.min(Math.max(Number(req.query.limit) || 250, 50), 500);
-    const { data, error } = await supabase.from("matches").select("*").eq("league_id", leagueId)
+    const leagueId=String(req.params.leagueId);
+    if(!/^l_[A-Za-z0-9_-]+$/.test(leagueId)) return res.status(400).json({ok:false,error:"ID campionato non valido."});
+    const catalog=await getEuropeanLeagueCatalog();
+    if(!catalog.some(x=>String(x.id)===leagueId)) return res.status(404).json({ok:false,error:"Campionato non ammesso."});
+    const testLimit=Math.min(Math.max(Number(req.query.limit)||250,50),500);
+    const {data,error}=await supabase.from("matches").select("*").eq("league_id",leagueId)
       .not("home_goals","is",null).not("away_goals","is",null).order("match_date",{ascending:false}).limit(5000);
-    if (error) throw error;
+    if(error) throw error;
     const history=(data||[]).filter(m=>isFinished(m)&&m.match_date&&getNumber(m.home_goals)!==null&&getNumber(m.away_goals)!==null)
       .sort((a,b)=>new Date(a.match_date)-new Date(b.match_date));
-    const evaluation=history.slice(-limit);
-    // V2: griglia più fine attorno ai parametri promettenti.
-    const configs=[];
-    for (const windowSize of [10,15,20,25,30]) for (const decay of [0.85,0.9,0.95,1]) for (const venueBlend of [0.2,0.3,0.4])
-      configs.push({window:windowSize,decay,venue_blend:venueBlend});
-    function weighted(vals, decay) { if(!vals.length)return null; let sum=0,w=0; vals.forEach((v,i)=>{const wi=Math.pow(decay,i);sum+=v*wi;w+=wi;});return w?sum/w:null; }
-    function teamSamples(team,date,venue) {
-      const t=String(team||"").toLowerCase();
-      return history.filter(m=>new Date(m.match_date)<new Date(date)&&((venue==="home"?String(m.home_team||"").toLowerCase()===t:venue==="away"?String(m.away_team||"").toLowerCase()===t:String(m.home_team||"").toLowerCase()===t||String(m.away_team||"").toLowerCase()===t)))
-        .sort((a,b)=>new Date(b.match_date)-new Date(a.match_date)).map(m=>{const h=String(m.home_team||"").toLowerCase()===t;return {for:Number(h?m.home_goals:m.away_goals),against:Number(h?m.away_goals:m.home_goals)};});
+    const test=history.slice(-testLimit),preTest=history.slice(0,-test.length);
+    const valSize=Math.min(250,Math.max(100,Math.floor(preTest.length*0.25)));
+    const validation=preTest.slice(-valSize),training=preTest.slice(0,-validation.length);
+    if(training.length<100||validation.length<50||test.length<50)return res.status(422).json({ok:false,error:"Storico insufficiente per split temporale train/validation/test.",counts:{history:history.length,training:training.length,validation:validation.length,test:test.length}});
+    const configs=[];for(const w of [20,25,30])for(const d of [0.9,0.95,1])for(const vb of [0.1,0.2,0.3])configs.push({window:w,decay:d,venue_blend:vb});
+    const baseline={window:10,decay:0.75,venue_blend:0.7};
+    const weighted=(vals,d)=>{if(!vals.length)return null;let s=0,ws=0;vals.forEach((v,i)=>{const w=Math.pow(d,i);s+=v*w;ws+=w;});return ws?s/ws:null;};
+    const samples=(team,date,venue,source)=>{const t=String(team||"").toLowerCase();return source.filter(m=>new Date(m.match_date)<new Date(date)&&((venue==="home"?String(m.home_team||"").toLowerCase()===t:venue==="away"?String(m.away_team||"").toLowerCase()===t:String(m.home_team||"").toLowerCase()===t||String(m.away_team||"").toLowerCase()===t))).sort((a,b)=>new Date(b.match_date)-new Date(a.match_date)).map(m=>{const h=String(m.home_team||"").toLowerCase()===t;return{for:Number(h?m.home_goals:m.away_goals),against:Number(h?m.away_goals:m.home_goals)};});};
+    const poisson=(l,k)=>{if(l<=0)return k===0?1:0;let f=1;for(let z=2;z<=k;z++)f*=z;return Math.exp(-l)*Math.pow(l,k)/f;};
+    function predict(match,cfg,source){const date=match.match_date,prior=source.filter(m=>new Date(m.match_date)<new Date(date)).slice(-300);if(prior.length<30)return null;
+      const lh0=prior.reduce((s,m)=>s+Number(m.home_goals),0)/prior.length,la0=prior.reduce((s,m)=>s+Number(m.away_goals),0)/prior.length;
+      const h=samples(match.home_team,date,"all",source).slice(0,cfg.window),a=samples(match.away_team,date,"all",source).slice(0,cfg.window),hv=samples(match.home_team,date,"home",source).slice(0,5),av=samples(match.away_team,date,"away",source).slice(0,5);if(h.length<5||a.length<5)return null;
+      const hf=weighted(h.map(x=>x.for),cfg.decay),ha=weighted(h.map(x=>x.against),cfg.decay),af=weighted(a.map(x=>x.for),cfg.decay),aa=weighted(a.map(x=>x.against),cfg.decay);
+      const hvf=hv.length>=3?weighted(hv.map(x=>x.for),cfg.decay):hf,hva=hv.length>=3?weighted(hv.map(x=>x.against),cfg.decay):ha,avf=av.length>=3?weighted(av.map(x=>x.for),cfg.decay):af,ava=av.length>=3?weighted(av.map(x=>x.against),cfg.decay):aa;
+      const shrink=(v,p,n)=>(v*n+p*3)/(n+3),hFor=shrink(hf,lh0,h.length),hAgainst=shrink(ha,la0,h.length),aFor=shrink(af,la0,a.length),aAgainst=shrink(aa,lh0,a.length);
+      const hVFor=shrink(hvf,hFor,hv.length),hVAgainst=shrink(hva,hAgainst,hv.length),aVFor=shrink(avf,aFor,av.length),aVAgainst=shrink(ava,aAgainst,av.length);
+      const oh=lh0*(hFor/lh0)*(aAgainst/la0),oa=la0*(aFor/la0)*(hAgainst/lh0),vh=lh0*(hVFor/lh0)*(aVAgainst/la0),va=la0*(aVFor/la0)*(hVAgainst/lh0);
+      const lH=Math.max(.1,Math.min(4.5,(1-cfg.venue_blend)*oh+cfg.venue_blend*vh)),lA=Math.max(.1,Math.min(4.5,(1-cfg.venue_blend)*oa+cfg.venue_blend*va));
+      let p1=0,px=0,p2=0,o15=0,o25=0,o35=0,btts=0,sum=0,mat=[];for(let h=0;h<=8;h++)for(let a=0;a<=8;a++){const v=poisson(lH,h)*poisson(lA,a);mat.push({h,a,v});sum+=v;}for(const x of mat){const v=x.v/sum;if(x.h>x.a)p1+=v;else if(x.h===x.a)px+=v;else p2+=v;if(x.h+x.a>=2)o15+=v;if(x.h+x.a>=3)o25+=v;if(x.h+x.a>=4)o35+=v;if(x.h>0&&x.a>0)btts+=v;}return{"1":p1,"X":px,"2":p2,over_1_5:o15,over_2_5:o25,over_3_5:o35,btts};
     }
-    function poisson(l,k){if(l<=0)return k===0?1:0;let fac=1;for(let z=2;z<=k;z++)fac*=z;return Math.exp(-l)*Math.pow(l,k)/fac;}
-    function probs(lh,la){let matrix=[],sum=0;for(let h=0;h<=8;h++)for(let a=0;a<=8;a++){let v=poisson(lh,h)*poisson(la,a);matrix.push({h,a,v});sum+=v;}return matrix.map(x=>({...x,v:x.v/sum}));}
-    const metrics={};
-    for(const cfg of configs){const key=`w${cfg.window}_d${cfg.decay}_v${cfg.venue_blend}`;metrics[key]={config:cfg,markets:{}};}
-    const binaryMarkets=["over_1_5","over_2_5","over_3_5","btts"];
-    for(const match of evaluation){
-      const date=match.match_date,home=match.home_team,away=match.away_team;
-      const prior=history.filter(m=>new Date(m.match_date)<new Date(date)).slice(-300);
-      if(prior.length<30)continue;
-      const lha=prior.reduce((s,m)=>s+Number(m.home_goals),0)/prior.length,laa=prior.reduce((s,m)=>s+Number(m.away_goals),0)/prior.length;
-      const hAll=teamSamples(home,date,"all"),aAll=teamSamples(away,date,"all"),hVenue=teamSamples(home,date,"home"),aVenue=teamSamples(away,date,"away");
-      const actualH=Number(match.home_goals),actualA=Number(match.away_goals),total=actualH+actualA;
-      const actualClass=actualH>actualA?"1":actualH===actualA?"X":"2";
-      const actual={"over_1_5":total>=2,"over_2_5":total>=3,"over_3_5":total>=4,"btts":actualH>0&&actualA>0};
-      for(const cfg of configs){
-        const key=`w${cfg.window}_d${cfg.decay}_v${cfg.venue_blend}`,m=metrics[key];
-        const h=hAll.slice(0,cfg.window),a=aAll.slice(0,cfg.window),hv=hVenue.slice(0,5),av=aVenue.slice(0,5);
-        if(h.length<5||a.length<5)continue;
-        const hFor=weighted(h.map(x=>x.for),cfg.decay),hAgainst=weighted(h.map(x=>x.against),cfg.decay),aFor=weighted(a.map(x=>x.for),cfg.decay),aAgainst=weighted(a.map(x=>x.against),cfg.decay);
-        const hVf=hv.length>=3?weighted(hv.map(x=>x.for),cfg.decay):hFor,hVa=hv.length>=3?weighted(hv.map(x=>x.against),cfg.decay):hAgainst;
-        const aVf=av.length>=3?weighted(av.map(x=>x.for),cfg.decay):aFor,aVa=av.length>=3?weighted(av.map(x=>x.against),cfg.decay):aAgainst;
-        const shrink=(v,prior,n)=>(v*n+prior*3)/(n+3);
-        const ha=shrink(hFor,lha,h.length),hd=shrink(hAgainst,laa,h.length),aa=shrink(aFor,laa,a.length),ad=shrink(aAgainst,lha,a.length);
-        const hvf=shrink(hVf,ha,hv.length),hva=shrink(hVa,hd,hv.length),avf=shrink(aVf,aa,av.length),ava=shrink(aVa,ad,av.length);
-        const overallH=lha*(ha/lha)*(ad/laa),overallA=laa*(aa/laa)*(hd/lha);
-        const venueH=lha*(hvf/lha)*(ava/laa),venueA=laa*(avf/laa)*(hva/lha);
-        const blend=cfg.venue_blend;
-        const lh=Math.max(.1,Math.min(4.5,(1-blend)*overallH+blend*venueH)),la=Math.max(.1,Math.min(4.5,(1-blend)*overallA+blend*venueA));
-        const matrix=probs(lh,la);const p={"1":0,"X":0,"2":0,over_1_5:0,over_2_5:0,over_3_5:0,btts:0};
-        for(const x of matrix){if(x.h>x.a)p["1"]+=x.v;else if(x.h===x.a)p.X+=x.v;else p["2"]+=x.v;if(x.h+x.a>=2)p.over_1_5+=x.v;if(x.h+x.a>=3)p.over_2_5+=x.v;if(x.h+x.a>=4)p.over_3_5+=x.v;if(x.h>0&&x.a>0)p.btts+=x.v;}
-        (m.markets["1X2"]||(m.markets["1X2"]=[])).push({p:{"1":p["1"],"X":p.X,"2":p["2"]},y:actualClass});
-        for(const market of binaryMarkets)(m.markets[market]||(m.markets[market]=[])).push({p:p[market],y:actual[market]});
-      }
-    }
-    const results=Object.entries(metrics).map(([id,m])=>{
-      const marketResults={};let scoreSum=0,scoreCount=0;
-      for(const [market,rows] of Object.entries(m.markets)){
-        if(!rows.length)continue;
-        let acc,brier,logloss,meanProbability,actualRate;
-        if(market==="1X2"){
-          const classes=["1","X","2"];
-          acc=rows.filter(r=>classes.reduce((best,c)=>r.p[c]>r.p[best]?c:best,classes[0])===r.y).length/rows.length;
-          brier=rows.reduce((sum,r)=>sum+classes.reduce((ss,c)=>ss+Math.pow(r.p[c]-(r.y===c?1:0),2),0)/3,0)/rows.length;
-          logloss=rows.reduce((sum,r)=>sum-Math.log(Math.max(1e-6,r.p[r.y])),0)/rows.length;
-          meanProbability=rows.reduce((sum,r)=>sum+r.p[r.y],0)/rows.length;
-          actualRate=null;
-        }else{
-          acc=rows.filter(r=>(r.p>=.5)===r.y).length/rows.length;
-          brier=rows.reduce((sum,r)=>sum+Math.pow(r.p-(r.y?1:0),2),0)/rows.length;
-          logloss=rows.reduce((sum,r)=>sum-r.y*Math.log(Math.max(1e-6,r.p))-(1-r.y)*Math.log(Math.max(1e-6,1-r.p)),0)/rows.length;
-          meanProbability=rows.reduce((sum,r)=>sum+r.p,0)/rows.length;
-          actualRate=rows.filter(r=>r.y).length/rows.length;
-        }
-        marketResults[market]={n:rows.length,accuracy_percent:Number((acc*100).toFixed(2)),brier:Number(brier.toFixed(4)),log_loss:Number(logloss.toFixed(4)),mean_probability_percent:Number((meanProbability*100).toFixed(2)),actual_rate_percent:actualRate===null?null:Number((actualRate*100).toFixed(2))};
-        scoreSum+=brier;scoreCount++;
-      }
-      return{id,config:m.config,markets:marketResults,mean_brier:scoreCount?Number((scoreSum/scoreCount).toFixed(4)):null};
-    }).sort((a,b)=>(a.mean_brier??99)-(b.mean_brier??99));
-    res.json({ok:true,optimizer:"V2: multiclass 1X2 scoring + refined Poisson parameter grid; strict pre-match history",league_id:leagueId,history_matches:history.length,evaluation_matches_requested:limit,evaluation_matches_available:evaluation.length,configurations_tested:configs.length,ranking_metric:"Mean normalized Brier score; 1X2 scored as a proper 3-class market, lower is better",top_10:results.slice(0,10),current_reference:results.find(r=>r.config.window===10&&r.config.decay===0.75&&r.config.venue_blend===0.7)||null,all_results:results,warning:"Exploratory tuning on a historical window. Validate finalists on a separate untouched season before production changes."});
+    function score(rows){const out={};for(const market of ["1X2","over_1_5","over_2_5","over_3_5","btts"]){const rs=rows.filter(r=>r.market===market);if(!rs.length)continue;let acc,brier,ll,mean,rate;if(market==="1X2"){const cls=["1","X","2"];acc=rs.filter(r=>cls.reduce((b,c)=>r.p[c]>r.p[b]?c:b,cls[0])===r.y).length/rs.length;brier=rs.reduce((s,r)=>s+cls.reduce((q,c)=>q+(r.p[c]-(r.y===c?1:0))**2,0)/3,0)/rs.length;ll=rs.reduce((s,r)=>s-Math.log(Math.max(1e-6,r.p[r.y])),0)/rs.length;mean=rs.reduce((s,r)=>s+r.p[r.y],0)/rs.length;rate=null;}else{acc=rs.filter(r=>(r.p>=.5)===r.y).length/rs.length;brier=rs.reduce((s,r)=>s+(r.p-(r.y?1:0))**2,0)/rs.length;ll=rs.reduce((s,r)=>s-r.y*Math.log(Math.max(1e-6,r.p))-(1-r.y)*Math.log(Math.max(1e-6,1-r.p)),0)/rs.length;mean=rs.reduce((s,r)=>s+r.p,0)/rs.length;rate=rs.filter(r=>r.y).length/rs.length;}out[market]={n:rs.length,accuracy_percent:+(acc*100).toFixed(2),brier:+brier.toFixed(4),log_loss:+ll.toFixed(4),mean_probability_percent:+(mean*100).toFixed(2),actual_rate_percent:rate===null?null:+(rate*100).toFixed(2)};}return out;}
+    function evaluate(matches,cfg,source){const rows=[];for(const m of matches){const p=predict(m,cfg,source);if(!p)continue;const h=Number(m.home_goals),a=Number(m.away_goals),tot=h+a;rows.push({market:"1X2",p,y:h>a?"1":h===a?"X":"2"});for(const market of ["over_1_5","over_2_5","over_3_5","btts"])rows.push({market,p:p[market],y:market==="btts"?h>0&&a>0:tot>={"over_1_5":2,"over_2_5":3,"over_3_5":4}[market]});}return rows;}
+    const valResults=configs.map(c=>{const rows=evaluate(validation,c,history);const markets=score(rows),vals=Object.values(markets);return{config:c,markets,mean_brier:vals.length?+(vals.reduce((s,m)=>s+m.brier,0)/vals.length).toFixed(4):null,scored_matches:rows.filter(r=>r.market==="1X2").length};}).filter(r=>r.mean_brier!==null).sort((a,b)=>a.mean_brier-b.mean_brier);
+    const selected=valResults[0]?.config;if(!selected)throw new Error("Nessuna configurazione valutabile.");
+    const baselineRows=evaluate(test,baseline,history),selectedRows=evaluate(test,selected,history);
+    const baseScore=score(baselineRows),selectedScore=score(selectedRows);
+    const comparisons={};for(const m of Object.keys(selectedScore))comparisons[m]={baseline:baseScore[m]||null,optimized:selectedScore[m]||null,brier_delta:selectedScore[m]&&baseScore[m]?+(selectedScore[m].brier-baseScore[m].brier).toFixed(4):null,accuracy_delta_pp:selectedScore[m]&&baseScore[m]?+(selectedScore[m].accuracy_percent-baseScore[m].accuracy_percent).toFixed(2):null};
+    res.json({ok:true,optimizer:"V3 chronological train-validation-test; untouched holdout; strict pre-match history",league_id:leagueId,split:{history_matches:history.length,training_matches:training.length,validation_matches:validation.length,test_matches:test.length,training_dates:training.length?[training[0].match_date,training.at(-1).match_date]:null,validation_dates:[validation[0].match_date,validation.at(-1).match_date],test_dates:[test[0].match_date,test.at(-1).match_date]},selected_config:selected,selected_validation:valResults[0],validation_top_10:valResults.slice(0,10),baseline_config:baseline,baseline_test:baseScore,selected_test:selectedScore,test_comparison:comparisons,validation_configurations_tested:configs.length,warning:"Configurazione selezionata esclusivamente sulla validation. Test cronologico non usato per selezione; nessuna modifica al modello produzione. ROI non calcolabile senza quote storiche affidabili."});
   }catch(error){handleError(res,error);}
-});;
+}););;
  
 // ==========================================
 // ROTTA NON TROVATA
