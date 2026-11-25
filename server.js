@@ -5293,6 +5293,8 @@ async function runAutomaticResultsSync() {
 }
 
 // Backfill progressivo delle statistiche dettagliate su tutto lo storico disponibile.
+// Batch prudente: raddoppia la velocità di recupero mantenendo concorrenza API a 5.
+const AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE = 200;
 let automaticStatisticsSyncRunning = false;
 let automaticStatisticsSyncLastRun = null;
 let automaticStatisticsSyncLastReport = null;
@@ -5325,17 +5327,17 @@ async function runAutomaticStatisticsSync() {
     // Priorità: gare recenti prima, poi lo storico più vecchio. Il backfill
     // prosegue a blocchi anche sulle stagioni precedenti, fino al 2021.
     const priorityQueries = [
-      baseQuery().eq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
+      baseQuery().eq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE),
       baseQuery().neq("league_id", "l_0ALvwF").eq("season", currentSeason).limit(100),
       baseQuery().neq("season", currentSeason).limit(100)
     ];
     const selectedById = new Map();
     for (const query of priorityQueries) {
-      if (selectedById.size >= 100) break;
+      if (selectedById.size >= AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE) break;
       const { data, error } = await query;
       if (error) throw error;
       for (const match of data || []) {
-        if (!selectedById.has(String(match.id)) && selectedById.size < 100) {
+        if (!selectedById.has(String(match.id)) && selectedById.size < AUTOMATIC_STATISTICS_SYNC_BATCH_SIZE) {
           selectedById.set(String(match.id), match);
         }
       }
