@@ -5251,7 +5251,9 @@ app.post("/api/model/optimizer/batch/start", requireAccess, requireSportApi, req
 });
 app.get("/api/model/optimizer/batch/status", requireAccess, requireDatabase, (req,res)=>{
   if(!multiLeagueJob) return res.json({ok:true,job:null,message:"Nessun job avviato in questo processo server."});
-  res.json({ok:true,job:multiLeagueJob});
+  const j=multiLeagueJob;
+  const compact={...j,completed:(j.completed||[]).map(x=>({league_id:x.league_id,league_name:x.league_name,completed_at:x.completed_at,result:{split:x.result?.split,selected_config:x.result?.selected_config,baseline_config:x.result?.baseline_config,test_comparison:x.result?.test_comparison}}))};
+  res.json({ok:true,job:compact});
 });
 
 // ==========================================
