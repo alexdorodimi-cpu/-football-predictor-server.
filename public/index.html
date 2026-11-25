@@ -796,7 +796,7 @@ async function runModelOptimizer(){
   const comparison=result.test_comparison||{};
   const split=result.split||{};
   const lines=["🧠 OTTIMIZZATORE MODELLO","Campionato: "+leagueId,"Partite storico: "+(split.history_matches??"—"),"Train: "+(split.training_matches??"—")+" | Validation: "+(split.validation_matches??"—")+" | Test: "+(split.test_matches??"—"),"","CONFIGURAZIONE SELEZIONATA (validation)","Finestra: "+result.selected_config?.window+" | Decay: "+result.selected_config?.decay+" | Peso casa/trasferta: "+result.selected_config?.venue_blend,"","CONFRONTO SUL TEST FINALE (mai usato per scegliere)"];
-  for(const market of ["1X2","over_1_5","over_2_5","over_3_5","btts"]){
+  for(const market of ["1X2","over_0_5","under_0_5","over_1_5","under_1_5","over_2_5","under_2_5","over_3_5","under_3_5","over_4_5","under_4_5","btts"]){
    const c=comparison[market];if(!c)continue;
    lines.push(market+":");
    lines.push("  Baseline accuracy: "+(c.baseline?.accuracy_percent??"—")+"% | Brier: "+(c.baseline?.brier??"—"));
@@ -815,7 +815,7 @@ async function runOptimizerRobustness(){
  if(!leagueId||leagueId==="all"){output.textContent="Seleziona prima un campionato.";return;}
  output.textContent="🧪 Test robustezza in corso: 250, 400 e 500 partite...";
  const runs=[];
- const markets=["1X2","over_1_5","over_2_5","over_3_5","btts"];
+ const markets=["1X2","over_0_5","under_0_5","over_1_5","under_1_5","over_2_5","under_2_5","over_3_5","under_3_5","over_4_5","under_4_5","btts"];
  function render(){
   const lines=["🧪 TEST ROBUSTEZZA OTTIMIZZATORE","Campionato: "+leagueId,"Holdout cronologici: 250 / 400 / 500","⚠️ I campioni sono annidati e non indipendenti.",""];
   for(const run of runs){
@@ -845,7 +845,7 @@ async function runCrossLeagueCandidate(){
  if(!serie||!premier){output.textContent="Non trovo Serie A e Premier League nel catalogo. Premi prima TEST SERVER per caricare i campionati.";return;}
  output.textContent="🔬 Test configurazione candidata (25 / 1 / 0.1) su Serie A e Premier League...";const runs=[];
  for(const league of [serie,premier]){try{const result=await api("/api/model/optimizer/"+encodeURIComponent(league.value)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1");runs.push({name:league.text,result});}catch(e){output.textContent="Errore sul campionato "+league.text+": "+e.message+"\nRisultati completati: "+runs.length;return;}output.textContent="Campionati completati: "+runs.length+"/2...";}
- const markets=["1X2","over_1_5","over_2_5","over_3_5","btts"];const lines=["🔬 TEST CANDIDATO CROSS-LEAGUE","Configurazione fissa: finestra 25 | decay 1 | venue 0.1","Holdout cronologico 250 per ciascun campionato.","⚠️ Test diagnostico: nessuna attivazione in produzione.",""];
+ const markets=["1X2","over_0_5","under_0_5","over_1_5","under_1_5","over_2_5","under_2_5","over_3_5","under_3_5","over_4_5","under_4_5","btts"];const lines=["🔬 TEST CANDIDATO CROSS-LEAGUE","Configurazione fissa: finestra 25 | decay 1 | venue 0.1","Holdout cronologico 250 per ciascun campionato.","⚠️ Test diagnostico: nessuna attivazione in produzione.",""];
  for(const run of runs){const r=run.result;lines.push("━━ "+run.name+" ━━");lines.push("Storico "+r.split.history_matches+" | Train "+r.split.training_matches+" | Validation "+r.split.validation_matches+" | Test "+r.split.test_matches);for(const market of markets){const m=r.test_comparison?.[market];if(m)lines.push(market+": Acc "+m.baseline.accuracy_percent+"% → "+m.optimized.accuracy_percent+"% ("+(m.accuracy_delta_pp>0?"+":"")+m.accuracy_delta_pp+" pp) | Brier "+m.baseline.brier+" → "+m.optimized.brier+" ("+(m.brier_delta>0?"+":"")+m.brier_delta+")");}lines.push("");}
  output.textContent=lines.join("\n");
 }
