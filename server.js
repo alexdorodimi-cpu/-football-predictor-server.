@@ -4668,7 +4668,7 @@ app.get(
       }
       // Whitelist iniziale Sisal: mercati standard elaborabili dal modello Poisson.
       // Mercati speciali e statistiche non verificate vengono esclususi.
-      const maxMatches = Math.min(Math.max(Number(req.query.max_matches) || 10, 1), 20);
+      const maxMatches = Math.min(Math.max(Number(req.query.max_matches) || 20, 1), 50);
       // Nessuna soglia minima di probabilità: ordina tutti gli eventi disponibili
       // per probabilità stimata decrescente e seleziona i più alti.
       const minProbability = 0;
@@ -4680,10 +4680,10 @@ app.get(
       const europeanLeagues = await getEuropeanLeagueCatalog();
       const europeanIds = europeanLeagues.map(item => String(item.id));
       if (!europeanIds.length) throw new Error("Nessun campionato europeo disponibile nel catalogo PitchAPI.");
+      // Cerca per data senza dipendere dal catalogo campionati (gli ID possono differire tra provider e database).
       const { data: fixtures, error } = await supabase
         .from("matches")
         .select("*")
-        .in("league_id", europeanIds)
         .gte("match_date", `${date}T00:00:00`)
         .lt("match_date", `${date}T23:59:59.999`)
         .order("match_date", { ascending: true });
@@ -4715,6 +4715,8 @@ app.get(
       const exactScoreOptions = [];
       const diagnostics = {
         fixtures_found: (fixtures || []).length,
+        fixtures_date_query: true,
+        european_catalog_count: europeanIds.length,
         fixtures_analyzed: 0,
         fixtures_matched_sisal: 0,
         fixtures_without_sisal_match: 0,
