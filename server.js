@@ -5239,9 +5239,24 @@ async function runMultiLeagueJob(job) {
     job.finished_at = job.updated_at;
     return;
   }
-  const catalogLeagues = catalog.filter(x => x && x.id && x.name && !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)));
+  // Solo i principali campionati europei: whitelist esplicita, niente coppe o serie minori.
+  const MAIN_EUROPEAN_LEAGUE_PATTERNS = [
+    /\\b(premier league)\\b/i,
+    /\\b(serie a)\\b/i,
+    /\\b(la liga|primera division)\\b/i,
+    /\\b(bundesliga)\\b/i,
+    /\\b(ligue 1)\\b/i,
+    /\\b(eredivisie)\\b/i,
+    /\\b(primeira liga|liga portugal)\\b/i,
+    /\\b(pro league|jupiler pro league)\\b/i,
+    /\\b(super lig|super league)\\b/i,
+    /\\b(scottish premiership|premiership)\\b/i
+  ];
+  const catalogLeagues = catalog.filter(x => x && x.id && x.name &&
+    !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)) &&
+    MAIN_EUROPEAN_LEAGUE_PATTERNS.some(pattern => pattern.test(String(x.name))));
   job.phase = "ranking_leagues_by_data";
-  job.current = "Selezione campionati con più storico nel database…";
+  job.current = "Selezione dei principali campionati europei con più storico…";
   job.updated_at = new Date().toISOString();
   const leagueCounts = await mapWithConcurrency(catalogLeagues, 5, async league => {
     try {
@@ -5253,7 +5268,7 @@ async function runMultiLeagueJob(job) {
     }
   });
   const MIN_MATCHES_FOR_BATCH = 500;
-  const MAX_BATCH_LEAGUES = 30;
+  const MAX_BATCH_LEAGUES = 10;
   const leagues = leagueCounts
     .filter(x => x.matches_count >= MIN_MATCHES_FOR_BATCH)
     .sort((a,b) => b.matches_count - a.matches_count)
