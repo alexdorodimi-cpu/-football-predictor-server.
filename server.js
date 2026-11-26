@@ -5210,10 +5210,16 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
 let multiLeagueJob = null;
 async function runMultiLeagueJob(job) {
   job.status = "running";
+  job.current = "Recupero catalogo campionati da PitchAPI…";
+  job.phase = "catalog_loading";
+  job.updated_at = new Date().toISOString();
   const catalog = await getEuropeanLeagueCatalog();
   const leagues = catalog.filter(x => x && x.id && x.name && !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)));
   job.leagues = leagues.map(x => ({id:String(x.id),name:String(x.name)}));
   job.total = leagues.length;
+  job.phase = "testing_leagues";
+  job.current = leagues.length ? "Preparazione primo campionato…" : null;
+  job.updated_at = new Date().toISOString();
   for (const league of leagues) {
     if (job.completed.some(x => x.league_id === String(league.id))) continue;
     job.current = league.name;
@@ -5239,6 +5245,7 @@ async function runMultiLeagueJob(job) {
     await new Promise(r=>setTimeout(r,1200));
   }
   job.current = null;
+  job.phase = "finished";
   job.status = job.failed.length ? "completed_with_errors" : "completed";
   job.finished_at = new Date().toISOString();
   job.updated_at = job.finished_at;
