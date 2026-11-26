@@ -354,8 +354,20 @@ async function getLeagueNameMap() {
  }
  return leagueNameMapCache || nextMap;
 }
-async function getEuropeanLeagueCatalog() {
- return (await getLeagueCatalog()).filter(isEuropeanLeague);
+let europeanLeagueCatalogCache = null;
+let europeanLeagueCatalogCacheAt = 0;
+async function getEuropeanLeagueCatalog(options = {}) {
+ const now = Date.now();
+ if (!options.forceRefresh && europeanLeagueCatalogCache && now - europeanLeagueCatalogCacheAt < 30 * 60 * 1000) {
+   return europeanLeagueCatalogCache;
+ }
+ const catalog = await getLeagueCatalog();
+ const filtered = catalog.filter(isEuropeanLeague);
+ if (filtered.length) {
+   europeanLeagueCatalogCache = filtered;
+   europeanLeagueCatalogCacheAt = now;
+ }
+ return filtered;
 }
 function getMatchLeagueId(match) {
  return String(match?.league_id??match?.league?.id??match?.competition?.id??"");
@@ -5213,7 +5225,20 @@ async function runMultiLeagueJob(job) {
   job.current = "Recupero catalogo campionati da PitchAPI…";
   job.phase = "catalog_loading";
   job.updated_at = new Date().toISOString();
-  const catalog = await getEuropeanLeagueCatalog();
+  let catalog;
+  try {
+    catalog = await Promise.race([
+      getEuropeanLeagueCatalog(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout catalogo campionati: 30 secondi")), 30000))
+    ]);
+  } catch (catalogError) {
+    job.status = "failed";
+    job.phase = "catalog_error";
+    job.error = catalogError.message;
+    job.updated_at = new Date().toISOString();
+    job.finished_at = job.updated_at;
+    return;
+  }
   const leagues = catalog.filter(x => x && x.id && x.name && !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)));
   job.leagues = leagues.map(x => ({id:String(x.id),name:String(x.name)}));
   job.total = leagues.length;
@@ -5224,20 +5249,25 @@ async function runMultiLeagueJob(job) {
     if (job.completed.some(x => x.league_id === String(league.id))) continue;
     job.current = league.name;
     let result = null, error = null;
-    for (let attempt=1; attempt<=4 && !result; attempt++) {
+    for (let attempt=1; attempt<=2 && !result; attempt++) {
       job.attempt = attempt;
       try {
         job.phase = "testing_league";
-        job.current = league.name + " (tentativo " + attempt + "/4)";
+        job.current = league.name + " (tentativo " + attempt + "/2)";
         job.updated_at = new Date().toISOString();
         const url = "http://127.0.0.1:"+PORT+"/api/model/optimizer/"+encodeURIComponent(league.id)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1";
-        const response = await fetch(url,{headers:{Authorization:"Bearer "+ACCESS_TOKEN},signal:AbortSignal.timeout(120000)});
+        const response = await fetch(url,{headers:{Authorization:"Bearer "+ACCESS_TOKEN},signal:AbortSignal.timeout(60000)});
         const body = await response.json();
         if (!response.ok || body?.ok !== true) throw new Error(body?.error || "HTTP "+response.status);
         result = body;
       } catch(e) {
         error = e;
-        if (attempt < 4) await new Promise(r=>setTimeout(r,1500*attempt));
+        // Errori di dati/HTTP 4xx non vanno ritentati; solo timeout o 5xx temporanei.
+        if (attempt < 2 && (e.name === "TimeoutError" || e.name === "AbortError" || Number(e.status || 0) >= 500 || /HTTP 5\d\d|fetch failed|network/i.test(e.message))) {
+          await new Promise(r=>setTimeout(r,2000));
+        } else {
+          break;
+        }
       }
     }
     if (result) job.completed.push({league_id:String(league.id),league_name:String(league.name),result,completed_at:new Date().toISOString()});
@@ -5245,8 +5275,8 @@ async function runMultiLeagueJob(job) {
     job.processed = job.completed.length + job.failed.length;
     job.phase = "league_completed";
     job.updated_at = new Date().toISOString();
-    // Pausa per rispettare il rate limit globale delle API.
-    await new Promise(r=>setTimeout(r,1200));
+    // Pausa breve: un campionato fallito non deve rallentare tutto il batch.
+    await new Promise(r=>setTimeout(r,400));
   }
   job.current = null;
   job.phase = "finished";
