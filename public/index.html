@@ -628,22 +628,9 @@ function renderPrediction(prediction,predictionError){
  </div>
 
  <div class="sectionTitle">RISULTATI ESATTI — TOP 5</div>
+  <div class="predictionError">Risultati esatti non disponibili.</div>
 
- const exactScores=Array.isArray(prediction.exact_scores)
-  ?prediction.exact_scores:[];
- if(exactScores.length){
-  exactScores.forEach(item=>{
-   html+=`
-    <div class="exactScore">
-     <span>Risultato ${escapeHtml(item.score)}</span>
-     <strong>${formatPercent(item.probability)}</strong>
-    </div>`;
-  });
- }else{
-  html+='<div class="predictionError">Risultati esatti non disponibili.</div>';
- }
-
- <div class="sectionTitle">CALCI D'ANGOLO — PROBABILITÀ</div>
+  <div class="sectionTitle">CALCI D'ANGOLO — PROBABILITÀ</div>
  <div class="marketGrid">
   ${marketCard("Over 8.5 corner","corners_total_over_8_5",p,reliability)}
   ${marketCard("Under 8.5 corner","corners_total_under_8_5",p,reliability)}
