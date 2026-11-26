@@ -359,6 +359,8 @@ button.full{width:100%}
    <h2>🎯 Generatore Multiple AI</h2>
    <small>Bookmaker: Sisal · mercati standard</small>
   </div>
+  <label>Campionato da analizzare</label>
+  <select id="multipleLeague"><option value="all">Tutti i campionati europei</option></select>
   <label>Data delle partite</label>
   <input type="date" id="multipleDate">
   <label>Metodo di selezione</label>
@@ -494,6 +496,8 @@ async function checkServer(){
    select.appendChild(option);
   });
 
+  const multipleSelect=document.getElementById("multipleLeague");
+  multipleSelect.innerHTML=select.innerHTML;
   document.getElementById("leagueCount").textContent=select.options.length-1;
   message.textContent="● Server collegato! "+(select.options.length-1)+" campionati caricati.";
  }catch(e){
@@ -783,7 +787,8 @@ async function generateMultiples(){
  button.textContent="ANALISI IN CORSO...";
  box.innerHTML='<div class="loading">⏳ Analisi partite e mercati in corso...</div>';
  try{
-  const query="?date="+encodeURIComponent(date)+"&mode="+encodeURIComponent(mode)+"&max_selections="+encodeURIComponent(count)+"&bookmaker=sisal";
+  const leagueId=document.getElementById("multipleLeague").value;
+  const query="?date="+encodeURIComponent(date)+"&league_id="+encodeURIComponent(leagueId)+"&mode="+encodeURIComponent(mode)+"&max_selections="+encodeURIComponent(count)+"&bookmaker=sisal";
   const result=await api("/api/multiples"+query);
   renderMultiplesResult(result);
  }catch(error){
