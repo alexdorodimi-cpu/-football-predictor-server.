@@ -4761,12 +4761,13 @@ app.get(
             source: "Poisson"
           });
         }
+        // Sisal è opzionale: genera candidati dalle probabilità del modello anche senza quote.
         const sisalEvent = sisalData.available ? findSisalEventForFixture(sisalData.events, match) : null;
-        if (!sisalEvent) {
+        if (sisalEvent) {
+          diagnostics.fixtures_matched_sisal = (diagnostics.fixtures_matched_sisal || 0) + 1;
+        } else {
           diagnostics.fixtures_without_sisal_match = (diagnostics.fixtures_without_sisal_match || 0) + 1;
-          continue;
         }
-        diagnostics.fixtures_matched_sisal = (diagnostics.fixtures_matched_sisal || 0) + 1;
 
         const oddsKeys = {
           "1": "1", "X": "X", "2": "2",
@@ -4784,24 +4785,23 @@ app.get(
         };
         const addCandidate = (market, probability, sampleSize, label) => {
           const oddsKey = oddsKeys[market];
-          const odds = oddsKey ? sisalEvent.markets[oddsKey] : null;
-          if (!Number.isFinite(Number(odds)) || Number(odds) <= 1) return;
+          const oddsValue = (sisalEvent && oddsKey) ? Number(sisalEvent.markets[oddsKey]) : NaN;
+          const odds = Number.isFinite(oddsValue) && oddsValue > 1 ? oddsValue : null;
           const value = Number(probability);
           if (!Number.isFinite(value) || value < 0 || value > 100) return;
           const pair = pairedMarkets[market] || [];
-          const pairOdds = pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1);
-          const rawImplied = 1 / Number(odds);
+          const pairOdds = sisalEvent ? pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1) : [];
           const pairTotal = pairOdds.reduce((sum, odd) => sum + 1 / odd, 0);
-          const marketProbability = pairTotal > 0 ? (rawImplied / pairTotal) * 100 : null;
+          const marketProbability = odds !== null && pairTotal > 0 ? ((1 / odds) / pairTotal) * 100 : null;
           candidates.push({
             match_id: match.id, league: match.league_name,
             home_team: match.home_team, away_team: match.away_team,
             market, label, probability: Number(value.toFixed(2)),
             model_probability: Number(value.toFixed(2)),
-            sisal_odds: Number(Number(odds).toFixed(2)),
+            sisal_odds: odds === null ? null : Number(odds.toFixed(2)),
             market_probability: marketProbability === null ? null : Number(marketProbability.toFixed(2)),
             probability_edge: marketProbability === null ? null : Number((value - marketProbability).toFixed(2)),
-            source: "poisson+sisal", sample_size: sampleSize ?? null
+            source: odds === null ? "poisson-only" : "poisson+sisal", sample_size: sampleSize ?? null
           });
         };
 
@@ -4849,7 +4849,7 @@ app.get(
         mode,
         bookmaker: "Sisal",
         sisal_feed: { available: sisalData.available, stale: sisalData.stale, updated_at: sisalData.updated_at, age_minutes: sisalData.age_minutes, events_count: sisalData.events.length },
-        market_policy: "Selezioni mostrate solo quando la partita è abbinata in modo univoco al PDF Sisal aggiornato e la quota del mercato è presente.",
+        market_policy: "Le selezioni sono ordinate per probabilità del modello Poisson; le quote Sisal, se abbinate, sono informative e non obbligatorie.",
         minimum_probability: minProbability,
         max_matches: maxMatches,
         max_selections: maxSelections,
@@ -4864,7 +4864,7 @@ app.get(
         exact_score_options: exactScoreOptions,
         diagnostics,
         warning:
-          "Probabilità stimate dal modello Poisson e quote lette dal PDF ufficiale Sisal. Le quote non garantiscono esiti; la probabilità combinata è una stima semplificata e non considera tutte le correlazioni."
+          "Le probabilità sono stime del modello Poisson; le quote Sisal possono essere assenti. La probabilità combinata è una stima semplificata e non considera tutte le correlazioni."
       });
     } catch (error) {
       handleError(res, error);
