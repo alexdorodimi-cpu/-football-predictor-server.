@@ -4681,12 +4681,15 @@ app.get(
       const europeanIds = europeanLeagues.map(item => String(item.id));
       if (!europeanIds.length) throw new Error("Nessun campionato europeo disponibile nel catalogo PitchAPI.");
       // Cerca per data senza dipendere dal catalogo campionati (gli ID possono differire tra provider e database).
-      const { data: fixtures, error } = await supabase
+      const selectedLeagueId = String(req.query.league_id || "all");
+      let fixtureQuery = supabase
         .from("matches")
         .select("*")
         .gte("match_date", `${date}T00:00:00`)
-        .lt("match_date", `${date}T23:59:59.999`)
-        .order("match_date", { ascending: true });
+        .lt("match_date", `${date}T23:59:59.999`);
+      if (selectedLeagueId !== "all") fixtureQuery = fixtureQuery.eq("league_id", selectedLeagueId);
+      else fixtureQuery = fixtureQuery.in("league_id", europeanIds);
+      const { data: fixtures, error } = await fixtureQuery.order("match_date", { ascending: true });
       if (error) throw error;
 
       // Scarica una sola volta il foglio Sisal per tutta la multipla.
@@ -4716,6 +4719,7 @@ app.get(
       const diagnostics = {
         fixtures_found: (fixtures || []).length,
         fixtures_date_query: true,
+        selected_league_id: selectedLeagueId,
         european_catalog_count: europeanIds.length,
         fixtures_analyzed: 0,
         fixtures_matched_sisal: 0,
