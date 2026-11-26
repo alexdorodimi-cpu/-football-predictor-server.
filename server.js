@@ -5227,8 +5227,11 @@ async function runMultiLeagueJob(job) {
     for (let attempt=1; attempt<=4 && !result; attempt++) {
       job.attempt = attempt;
       try {
+        job.phase = "testing_league";
+        job.current = league.name + " (tentativo " + attempt + "/4)";
+        job.updated_at = new Date().toISOString();
         const url = "http://127.0.0.1:"+PORT+"/api/model/optimizer/"+encodeURIComponent(league.id)+"?limit=250&fixed_window=25&fixed_decay=1&fixed_venue=0.1";
-        const response = await fetch(url,{headers:{Authorization:"Bearer "+ACCESS_TOKEN}});
+        const response = await fetch(url,{headers:{Authorization:"Bearer "+ACCESS_TOKEN},signal:AbortSignal.timeout(120000)});
         const body = await response.json();
         if (!response.ok || body?.ok !== true) throw new Error(body?.error || "HTTP "+response.status);
         result = body;
@@ -5240,6 +5243,7 @@ async function runMultiLeagueJob(job) {
     if (result) job.completed.push({league_id:String(league.id),league_name:String(league.name),result,completed_at:new Date().toISOString()});
     else job.failed.push({league_id:String(league.id),league_name:String(league.name),error:error?.message||"Errore sconosciuto"});
     job.processed = job.completed.length + job.failed.length;
+    job.phase = "league_completed";
     job.updated_at = new Date().toISOString();
     // Pausa per rispettare il rate limit globale delle API.
     await new Promise(r=>setTimeout(r,1200));
