@@ -744,6 +744,17 @@ function renderMultiplesResult(result){
  result.selections.forEach((item,index)=>{
   html+='<div class="match" style="margin-top:9px"><div class="match-top"><span class="league">'+(index+1)+'. '+escapeHtml(item.league||"Campionato")+'</span><strong>'+Number(item.probability).toFixed(1)+'%</strong></div><div class="teams">'+escapeHtml(item.home_team)+' - '+escapeHtml(item.away_team)+'</div><div class="match-bottom"><span>'+escapeHtml(item.label||item.market)+'</span><span class="muted">'+escapeHtml(item.source)+'</span></div></div>';
  });
+ if(Array.isArray(result.exact_score_options)&&result.exact_score_options.length){
+  html+='<div class="sectionTitle">🎯 RISULTATI ESATTI PER MULTIPLE — PROBABILITÀ MODELLO</div>';
+  html+='<p class="muted">Queste opzioni sono calcolate dal modello e non sono incluse nella multipla principale perché il feed Sisal non fornisce quote esatte verificate.</p>';
+  result.exact_score_options.forEach(match=>{
+   html+='<div class="match"><div class="match-top"><span class="league">'+escapeHtml(match.league||"Campionato")+'</span></div><div class="teams">'+escapeHtml(match.home_team)+' - '+escapeHtml(match.away_team)+'</div>';
+   (match.options||[]).forEach(score=>{
+    html+='<div class="exactScore"><span>Risultato '+escapeHtml(score.score)+'</span><strong>'+Number(score.probability).toFixed(1)+'%</strong></div>';
+   });
+   html+='</div>';
+  });
+ }
  html+='<p class="muted">Probabilità combinata teorica: '+Number(result.naive_combined_probability||0).toFixed(2)+'%. Non tiene conto delle correlazioni.</p>';
  box.innerHTML=html;
 }
