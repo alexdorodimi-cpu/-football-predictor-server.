@@ -38,6 +38,12 @@ const PITCHAPI_URL = "https://api.pitchapi.dev/v1";
 const PITCHAPI_KEY = String(process.env.PITCHAPI_KEY || "").trim();
 const ACCESS_TOKEN = String(process.env.PREDICTOR_ACCESS_TOKEN || "").trim();
 const RANDOM_FOREST_ENABLED = String(process.env.ENABLE_RANDOM_FOREST || "").toLowerCase() === "true";
+ // Parametri del modello regolabili da Render senza modificare il codice.
+ // I valori di default mantengono il comportamento attuale.
+ const MODEL_PRIOR_MATCHES = Math.max(0, Math.min(20, Number(process.env.MODEL_PRIOR_MATCHES || 3)));
+ const MODEL_VENUE_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_VENUE_BLEND || 0.7)));
+ const MODEL_XG_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_XG_BLEND || 0.25)));
+
 
 app.use("/api/", rateLimit({
   windowMs: 60 * 1000,
@@ -1046,10 +1052,10 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
 
   // Shrinkage bayesiano: regolarizza le medie della squadra verso
   // quelle del campionato per ridurre l'effetto di campioni piccoli.
-  const PRIOR_MATCHES = 3;
+  const PRIOR_MATCHES = MODEL_PRIOR_MATCHES;
   const shrink = (observed, prior, sampleCount) =>
     (observed * sampleCount + prior * PRIOR_MATCHES) /
-    (sampleCount + PRIOR_MATCHES);
+    (sampleCount + PRIOR_MATCHES || 1);
 
   const safeHomeLeague = Math.max(0.4, leagueHomeAverage);
   const safeAwayLeague = Math.max(0.4, leagueAwayAverage);
@@ -1087,12 +1093,12 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
   const venueAwayLambda =
     safeAwayLeague * (awayVenueFor / safeAwayLeague) * (homeVenueAgainst / safeHomeLeague);
 
-  // 30% forza generale + 70% rendimento casa/trasferta.
+  // Blend generale/venue configurabile per esperimenti; default 70% venue.
   let homeLambda = Math.max(0.10, Math.min(4.5,
-    0.3 * overallHomeLambda + 0.7 * venueHomeLambda
+    (1 - MODEL_VENUE_BLEND) * overallHomeLambda + MODEL_VENUE_BLEND * venueHomeLambda
   ));
   let awayLambda = Math.max(0.10, Math.min(4.5,
-    0.3 * overallAwayLambda + 0.7 * venueAwayLambda
+    (1 - MODEL_VENUE_BLEND) * overallAwayLambda + MODEL_VENUE_BLEND * venueAwayLambda
   ));
 
   // Integra gli xG storici nel modello gol solo quando entrambi i lati
@@ -1105,8 +1111,8 @@ function calculatePrediction(fixture, history, lineupImpact = null, statisticalF
     Number(xgCounts?.home || 0) >= 5 &&
     Number(xgCounts?.away || 0) >= 5;
   const preXgLambdas = { home: homeLambda, away: awayLambda };
-  const XG_BLEND_WEIGHT = 0.25;
-  if (xgReady) {
+  const XG_BLEND_WEIGHT = MODEL_XG_BLEND;
+  if (xgReady && XG_BLEND_WEIGHT > 0) {
     homeLambda = Math.max(0.10, Math.min(4.5,
       (1 - XG_BLEND_WEIGHT) * homeLambda +
       XG_BLEND_WEIGHT * Number(xgAverages.home)
