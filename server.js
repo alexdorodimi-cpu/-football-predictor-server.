@@ -121,7 +121,7 @@ function requireDatabase(req, res, next) {
 
 // Protezione di tutte le API tranne status
 app.use("/api", (req, res, next) => {
-  if (req.path === "/status" || req.path === "/auth-diagnostic") {
+  if (req.path === "/status" || req.path === "/auth-diagnostic" || req.path === "/odds-provider/status") {
     return next();
   }
 
@@ -4904,7 +4904,7 @@ app.get(
 // ==========================================
 
 // Free odds feed: odss-api.com (500 requests/month on free tier).
-const ODSS_API_KEY=process.env.ODSS_API_KEY||"";
+app.get("/api/odds-provider/status", (req, res) => {\n  res.json({ ok: true, provider: "odss-api", configured: Boolean(String(process.env.ODSS_API_KEY || "").trim()) });\n});\n\nconst ODSS_API_KEY=process.env.ODSS_API_KEY||"";
 async function getOdssOddsForDate(date){
  if(!ODSS_API_KEY)return {enabled:false,events:[],provider:"odss-api",reason:"ODSS_API_KEY missing"};
  const from=date+"T00:00:00+01:00",to=date+"T23:59:59+01:00";
