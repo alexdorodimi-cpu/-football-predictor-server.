@@ -371,11 +371,14 @@ async function getEuropeanLeagueCatalog(options = {}) {
  }
  const catalog = await getLeagueCatalog();
  const filtered = catalog.filter(isEuropeanLeague);
- if (filtered.length) {
-   europeanLeagueCatalogCache = filtered;
+ // Se PitchAPI cambia il formato dei metadati paese/continente,
+ // non bloccare la ricerca: usa il catalogo completo come fallback.
+ const usableCatalog = filtered.length ? filtered : catalog;
+ if (usableCatalog.length) {
+   europeanLeagueCatalogCache = usableCatalog;
    europeanLeagueCatalogCacheAt = now;
  }
- return filtered;
+ return usableCatalog;
 }
 function getMatchLeagueId(match) {
  return String(match?.league_id??match?.league?.id??match?.competition?.id??"");
