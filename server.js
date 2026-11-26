@@ -5241,16 +5241,16 @@ async function runMultiLeagueJob(job) {
   }
   // Solo i principali campionati europei: whitelist esplicita, niente coppe o serie minori.
   const MAIN_EUROPEAN_LEAGUE_PATTERNS = [
-    /\\b(premier league)\\b/i,
-    /\\b(serie a)\\b/i,
-    /\\b(la liga|primera division)\\b/i,
-    /\\b(bundesliga)\\b/i,
-    /\\b(ligue 1)\\b/i,
-    /\\b(eredivisie)\\b/i,
-    /\\b(primeira liga|liga portugal)\\b/i,
-    /\\b(pro league|jupiler pro league)\\b/i,
-    /\\b(super lig|super league)\\b/i,
-    /\\b(scottish premiership|premiership)\\b/i
+    /\b(premier league)\b/i,
+    /\b(serie a)\b/i,
+    /\b(la liga|primera division)\b/i,
+    /\b(bundesliga)\b/i,
+    /\b(ligue 1)\b/i,
+    /\b(eredivisie)\b/i,
+    /\b(primeira liga|liga portugal)\b/i,
+    /\b(pro league|jupiler pro league)\b/i,
+    /\b(super lig|super league)\b/i,
+    /\b(scottish premiership|premiership)\b/i
   ];
   const catalogLeagues = catalog.filter(x => x && x.id && x.name &&
     !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)) &&
