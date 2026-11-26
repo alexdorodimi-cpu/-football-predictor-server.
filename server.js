@@ -41,8 +41,10 @@ const RANDOM_FOREST_ENABLED = String(process.env.ENABLE_RANDOM_FOREST || "").toL
  // Parametri del modello regolabili da Render senza modificare il codice.
  // I valori di default mantengono il comportamento attuale.
  const MODEL_PRIOR_MATCHES = Math.max(0, Math.min(20, Number(process.env.MODEL_PRIOR_MATCHES || 3)));
- const MODEL_VENUE_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_VENUE_BLEND || 0.7)));
+ const MODEL_VENUE_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_VENUE_BLEND || 0.1)));
  const MODEL_XG_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_XG_BLEND || 0.25)));
+ const MODEL_HISTORY_WINDOW = Math.max(5, Math.min(30, Number(process.env.MODEL_HISTORY_WINDOW || 25)));
+ const MODEL_DECAY = Math.max(0.5, Math.min(1, Number(process.env.MODEL_DECAY || 1)));
 
 
 app.use("/api/", rateLimit({
@@ -688,7 +690,7 @@ async function getLeagueMatchesFromDatabase(
 // MODELLO POISSON
 // ==========================================
 
-function weightedAverage(sample, key) {
+function weightedAverage(sample, key, decay = MODEL_DECAY) {
   if (!sample.length) {
     return 0;
   }
@@ -697,7 +699,7 @@ function weightedAverage(sample, key) {
   let totalWeight = 0;
 
   sample.forEach((item, index) => {
-    const weight = Math.pow(0.75, index);
+    const weight = Math.pow(decay, index);
     const value = getNumber(item[key]);
 
     if (value === null) {
@@ -904,7 +906,7 @@ function sampleForTeamByName(
       new Date(b.match_date || b.date) -
       new Date(a.match_date || a.date)
     )
-    .slice(0, 10)
+    .slice(0, MODEL_HISTORY_WINDOW)
     .map((match, index) => {
       const home =
         String(match.home_team || "")
@@ -920,7 +922,7 @@ function sampleForTeamByName(
         away_team: match.away_team || null,
         score: `${match.home_goals}-${match.away_goals}`,
         venue: home ? "home" : "away",
-        weight: Number(Math.pow(0.75, index).toFixed(4))
+        weight: Number(Math.pow(MODEL_DECAY, index).toFixed(4))
       };
     });
 }
