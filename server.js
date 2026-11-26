@@ -4816,6 +4816,8 @@ app.get(
           const pairOdds = sisalEvent ? pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1) : [];
           const pairTotal = pairOdds.reduce((sum, odd) => sum + 1 / odd, 0);
           const marketProbability = odds !== null && pairTotal > 0 ? ((1 / odds) / pairTotal) * 100 : null;
+          const externalPrice = externalOdds ? findBestExternalPrice(externalOdds, market.startsWith("over_")||market.startsWith("under_")?"Totals":"ML", market.startsWith("over_")?"over":market.startsWith("under_")?"under":market, market.startsWith("over_")||market.startsWith("under_")?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):undefined) : null;
+          const expectedValuePercent = externalPrice ? Number(((value/100*externalPrice.odds-1)*100).toFixed(2)) : null;
           candidates.push({
             match_id: match.id, league: match.league_name,
             home_team: match.home_team, away_team: match.away_team,
@@ -4824,8 +4826,8 @@ app.get(
             sisal_odds: odds === null ? null : Number(odds.toFixed(2)),
             market_probability: marketProbability === null ? null : Number(marketProbability.toFixed(2)),
             probability_edge: marketProbability === null ? null : Number((value - marketProbability).toFixed(2)),
-            external_odds: externalOdds ? findBestExternalPrice(externalOdds, market.startsWith("over_")||market.startsWith("under_")?"Totals":"ML", market.startsWith("over_")?"over":market.startsWith("under_")?"under":market, market.startsWith("over_")||market.startsWith("under_")?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):undefined) : null,
-            expected_value_percent: null,
+            external_odds: externalPrice,
+            expected_value_percent: expectedValuePercent,
                         source: odds === null ? "poisson-only" : "poisson+sisal", sample_size: sampleSize ?? null
           });
         };
