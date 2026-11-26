@@ -4732,8 +4732,8 @@ app.get(
         console.error("Sisal multipla:", sisalError.message);
       }
 
-      let externalOddsFeed={enabled:false,events:[],provider:'odds-api.io',reason:'ODDS_API_KEY missing'};
-      try{externalOddsFeed=await getExternalOddsEvents(date);}catch(e){console.warn('External odds API:',e.message);externalOddsFeed.error=e.message;}
+      let externalOddsFeed={enabled:false,events:[],provider:"odss-api",reason:"ODSS_API_KEY missing"};
+      try{externalOddsFeed=await getOdssOddsForDate(date);}catch(e){console.warn("odss-api:",e.message);externalOddsFeed.error=e.message;}
 
       const historyCache = {};
       const candidates = [];
@@ -4784,8 +4784,7 @@ app.get(
         }
         // Sisal è opzionale: genera candidati dalle probabilità del modello anche senza quote.
         const sisalEvent = sisalData.available ? findSisalEventForFixture(sisalData.events, match) : null;
-        const externalEvent=externalOddsFeed.enabled?findExternalEvent(externalOddsFeed.events,match):null;
-        const externalOdds=externalEvent?await getExternalEventOdds(externalEvent.id||externalEvent.eventId):null;
+        const externalEvent=externalOddsFeed.enabled?findOdssEvent(externalOddsFeed.events,match):null;
         if (sisalEvent) {
           diagnostics.fixtures_matched_sisal = (diagnostics.fixtures_matched_sisal || 0) + 1;
         } else {
@@ -4816,7 +4815,7 @@ app.get(
           const pairOdds = sisalEvent ? pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1) : [];
           const pairTotal = pairOdds.reduce((sum, odd) => sum + 1 / odd, 0);
           const marketProbability = odds !== null && pairTotal > 0 ? ((1 / odds) / pairTotal) * 100 : null;
-          const externalPrice = externalOdds ? findBestExternalPrice(externalOdds, market.startsWith("over_")||market.startsWith("under_")?"Totals":"ML", market.startsWith("over_")?"over":market.startsWith("under_")?"under":market, market.startsWith("over_")||market.startsWith("under_")?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):undefined) : null;
+          const externalPrice = externalEvent ? findBestOdssPrice(externalEvent,market) : null;
           const expectedValuePercent = externalPrice ? Number(((value/100*externalPrice.odds-1)*100).toFixed(2)) : null;
           candidates.push({
             match_id: match.id, league: match.league_name,
@@ -4904,32 +4903,32 @@ app.get(
 // IMPORTATORE FOGLIO QUOTE SISAL (PDF UFFICIALE)
 // ==========================================
 
-// External odds provider: Odds-API.io. Configure ODDS_API_KEY on Render.
-const ODDS_API_KEY=process.env.ODDS_API_KEY||"";
-const ODDS_BOOKMAKERS=(process.env.ODDS_BOOKMAKERS||"Sisal IT,Snai IT,Goldbet IT,Eurobet IT,Lottomatica IT").split(",").map(x=>x.trim()).filter(Boolean);
-async function getExternalOddsEvents(date){
- if(!ODDS_API_KEY)return {enabled:false,events:[],provider:"odds-api.io",reason:"ODDS_API_KEY missing"};
- const p=new URLSearchParams({apiKey:ODDS_API_KEY,sport:"football",from:date+"T00:00:00Z",to:date+"T23:59:59Z",limit:"1000"});
- const r=await fetch("https://api.odds-api.io/v3/events?"+p,{signal:AbortSignal.timeout(15000)});
- if(!r.ok)throw new Error("Odds provider events HTTP "+r.status);
- const j=await r.json();return {enabled:true,events:Array.isArray(j)?j:(j.items||j.events||j.data||[]),provider:"odds-api.io"};
+// Free odds feed: odss-api.com (500 requests/month on free tier).
+const ODSS_API_KEY=process.env.ODSS_API_KEY||"";
+async function getOdssOddsForDate(date){
+ if(!ODSS_API_KEY)return {enabled:false,events:[],provider:"odss-api",reason:"ODSS_API_KEY missing"};
+ const from=date+"T00:00:00+01:00",to=date+"T23:59:59+01:00";
+ const p=new URLSearchParams({sport:"calcio",commence_from:from,commence_to:to,playable_it:"true",limit:"500",state:"prematch",content:"match"});
+ const r=await fetch("https://odss-api.com/api/v1/odds?"+p,{headers:{"x-api-key":ODSS_API_KEY},signal:AbortSignal.timeout(15000)});
+ if(!r.ok)throw new Error("odss-api HTTP "+r.status);
+ const j=await r.json();return {enabled:true,events:Array.isArray(j.odds)?j.odds:[],provider:"odss-api"};
 }
-function findExternalEvent(events,match){
+function findOdssEvent(events,match){
  const h=normalizeExternalTeamName(match.home_team),a=normalizeExternalTeamName(match.away_team);
- return (events||[]).find(e=>normalizeExternalTeamName(e.home||e.home_team||e.homeTeam||"")===h&&normalizeExternalTeamName(e.away||e.away_team||e.awayTeam||"")===a)||null;
+ return (events||[]).find(e=>normalizeExternalTeamName(e.home_team||"")===h&&normalizeExternalTeamName(e.away_team||"")===a)||null;
 }
-async function getExternalEventOdds(id){
- if(!ODDS_API_KEY||!id)return null;
- const p=new URLSearchParams({apiKey:ODDS_API_KEY,eventId:String(id),bookmakers:ODDS_BOOKMAKERS.join(","),markets:"ML,Totals"});
- const r=await fetch("https://api.odds-api.io/v3/odds?"+p,{signal:AbortSignal.timeout(12000)});
- if(!r.ok)return null;return r.json();
-}
-function findBestExternalPrice(data,market,outcome,line){
- const books=data?.bookmakers||data?.data?.bookmakers||{};let best=null;
- for(const [book,markets] of Object.entries(books))for(const m of(Array.isArray(markets)?markets:[])){
-  const n=String(m.name||"").toLowerCase(),rows=Array.isArray(m.odds)?m.odds:[];
-  if(market==="ML"&&(n==="ml"||n.includes("moneyline"))){const row=rows[0]||{},k=outcome==="1"?"home":outcome==="X"?"draw":"away",price=Number(row[k]);if(price>1&&(!best||price>best.odds))best={odds:price,bookmaker:book,updated_at:m.updatedAt||null};}
-  if(market==="Totals"&&(n==="totals"||n.includes("total")))for(const row of rows){const ln=Number(row.hdp??row.line??row.total);if(line!=null&&Number.isFinite(ln)&&Math.abs(ln-line)>0.001)continue;const price=Number(row[outcome]);if(price>1&&(!best||price>best.odds))best={odds:price,bookmaker:book,updated_at:m.updatedAt||null};}
+function findBestOdssPrice(event,market){
+ if(!event)return null;
+ const wantedMarket=(["1","X","2"].includes(market))?"1x2":(market.startsWith("over_")||market.startsWith("under_"))?"ou":market.startsWith("btts_")?"btts":null;
+ if(!wantedMarket||event.market!==wantedMarket)return null;
+ const line=(market.startsWith("over_")||market.startsWith("under_"))?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):null;
+ if(line!==null&&Number(event.line)!==line)return null;
+ const outcome=market==="1"?"HOME":market==="X"?"DRAW":market==="2"?"AWAY":market.startsWith("over_")?"OVER":market.startsWith("under_")?"UNDER":market==="btts_yes"?"YES":"NO";
+ let best=null;
+ for(const book of (event.bookmakers||[])){
+  if(book.playable_it===false||book.suspended?.includes(outcome))continue;
+  const price=Number(book.outcomes?.[outcome]);
+  if(price>1&&(!best||price>best.odds))best={odds:price,bookmaker:book.key||book.name,updated_at:book.last_update||null};
  }
  return best;
 }
