@@ -4652,7 +4652,26 @@ app.get(
         over_3_5: "Over 3.5 gol",
         under_3_5: "Under 3.5 gol",
         btts_yes: "Entrambe le squadre segnano – Sì",
-        btts_no: "Entrambe le squadre segnano – No"
+        btts_no: "Entrambe le squadre segnano – No",
+        double_chance_1x: "Doppia chance 1X",
+        double_chance_x2: "Doppia chance X2",
+        double_chance_12: "Doppia chance 12",
+        multigoal_1_2: "Multigol 1-2",
+        multigoal_1_3: "Multigol 1-3",
+        multigoal_1_4: "Multigol 1-4",
+        multigoal_2_3: "Multigol 2-3",
+        multigoal_2_4: "Multigol 2-4",
+        multigoal_2_5: "Multigol 2-5",
+        multigoal_3_4: "Multigol 3-4",
+        combo_1x_over_1_5: "Combo 1X + Over 1.5",
+        combo_1x_under_2_5: "Combo 1X + Under 2.5",
+        combo_x2_over_1_5: "Combo X2 + Over 1.5",
+        combo_x2_under_2_5: "Combo X2 + Under 2.5",
+        combo_12_over_1_5: "Combo 12 + Over 1.5",
+        combo_12_under_2_5: "Combo 12 + Under 2.5",
+        dc_combo_1x_multigoal_1_4: "Combo 1X + Multigol 1-4",
+        dc_combo_x2_multigoal_1_4: "Combo X2 + Multigol 1-4",
+        dc_combo_12_multigoal_1_4: "Combo 12 + Multigol 1-4"
       };
       const mode = String(req.query.mode || "equilibrata").toLowerCase();
       if (!profiles[mode]) {
@@ -4849,7 +4868,7 @@ app.get(
         mode,
         bookmaker: "Sisal",
         sisal_feed: { available: sisalData.available, stale: sisalData.stale, updated_at: sisalData.updated_at, age_minutes: sisalData.age_minutes, events_count: sisalData.events.length },
-        market_policy: "Le selezioni sono ordinate per probabilità del modello Poisson; le quote Sisal, se abbinate, sono informative e non obbligatorie.",
+        market_policy: "Include mercati singoli, doppie chance, multigol e combo calcolate dalla matrice Poisson; una sola selezione per partita. Le combo hanno probabilità congiunta modellata, non quota verificata.",
         minimum_probability: minProbability,
         max_matches: maxMatches,
         max_selections: maxSelections,
