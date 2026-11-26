@@ -4825,6 +4825,7 @@ app.get(
             market_probability: marketProbability === null ? null : Number(marketProbability.toFixed(2)),
             probability_edge: marketProbability === null ? null : Number((value - marketProbability).toFixed(2)),
             external_odds: externalOdds ? findBestExternalPrice(externalOdds, market.startsWith("over_")||market.startsWith("under_")?"Totals":"ML", market.startsWith("over_")?"over":market.startsWith("under_")?"under":market, market.startsWith("over_")||market.startsWith("under_")?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):undefined) : null,
+            expected_value_percent: null,
                         source: odds === null ? "poisson-only" : "poisson+sisal", sample_size: sampleSize ?? null
           });
         };
