@@ -4710,6 +4710,7 @@ app.get(
 
       const historyCache = {};
       const candidates = [];
+      const exactScoreOptions = [];
       const diagnostics = {
         fixtures_found: (fixtures || []).length,
         fixtures_analyzed: 0,
@@ -4745,6 +4746,19 @@ app.get(
           continue;
         }
         diagnostics.fixtures_analyzed++;
+        if (Array.isArray(prediction.exact_scores) && prediction.exact_scores.length) {
+          exactScoreOptions.push({
+            match_id: match.id,
+            league: match.league_name,
+            home_team: match.home_team,
+            away_team: match.away_team,
+            options: prediction.exact_scores.slice(0, 5).map(score => ({
+              score: score.score,
+              probability: Number(score.probability)
+            })),
+            source: "Poisson"
+          });
+        }
         const sisalEvent = sisalData.available ? findSisalEventForFixture(sisalData.events, match) : null;
         if (!sisalEvent) {
           diagnostics.fixtures_without_sisal_match = (diagnostics.fixtures_without_sisal_match || 0) + 1;
@@ -4833,6 +4847,7 @@ app.get(
         selected_selections: selected.length,
         naive_combined_probability: Number(naiveCombinedProbability.toFixed(4)),
         selections: selected,
+        exact_score_options: exactScoreOptions,
         diagnostics,
         warning:
           "Probabilità stimate dal modello Poisson e quote lette dal PDF ufficiale Sisal. Le quote non garantiscono esiti; la probabilità combinata è una stima semplificata e non considera tutte le correlazioni."
