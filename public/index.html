@@ -356,40 +356,6 @@ button.full{width:100%}
 
  <div class="panel">
   <div class="panel-heading">
-   <h2>🧪 Backtest storico</h2>
-   <small>Verifica previsioni passate</small>
-  </div>
-  <p class="muted">Confronta le previsioni storiche con i risultati reali degli ultimi 30 giorni. Ogni previsione usa solo partite concluse prima del relativo calcio d'inizio.</p>
-  <button class="full" onclick="runMonthlyBacktest()">TEST ULTIMI 30 GIORNI</button>
-  <pre id="backtestResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
- </div>
-
- <div class="panel">
-  <div class="panel-heading">
-   <h2>🧠 Ottimizzatore del modello</h2>
-   <small>Confronto cronologico senza leakage</small>
-  </div>
-  <p class="muted">Testa configurazioni diverse e confronta il modello attuale con quello selezionato. Il test finale resta separato dalla selezione.</p>
-  <label>Partite da valutare</label>
-  <select id="optimizerLimit">
-   <option value="100">100</option>
-   <option value="150">150</option>
-   <option value="250" selected>250</option>
-   <option value="400">400</option>
-   <option value="500">500</option>
-  </select>
-  <button class="full" onclick="runModelOptimizer()">OTTIMIZZA E CONFRONTA</button>
-  <button class="full secondary" onclick="runOptimizerRobustness()">TEST ROBUSTEZZA (250 / 400 / 500)</button>
-  <button class="full secondary" onclick="runCrossLeagueCandidate()">TEST CONFIGURAZIONE CANDIDATA SU SERIE A + PREMIER</button>
-  <button class="full secondary" onclick="runLaLigaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LA LIGA</button>
-  <button class="full secondary" onclick="runBundesligaCandidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU BUNDESLIGA</button>
-  <button class="full secondary" onclick="runLigue1Candidate()">VALIDA CONFIGURAZIONE 25 / 1 / 0.1 SU LIGUE 1</button>
-  <button class="full secondary" onclick="startMultiLeagueValidation()">AVVIA VALIDAZIONE AUTOMATICA MULTI-CAMPIONATO</button>
-  <pre id="optimizerResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-top:12px"></pre>
- </div>
-
- <div class="panel">
-  <div class="panel-heading">
    <h2>🎯 Generatore Multiple AI</h2>
    <small>Bookmaker: Sisal · mercati standard</small>
   </div>
