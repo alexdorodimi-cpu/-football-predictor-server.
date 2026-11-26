@@ -361,12 +361,8 @@ button.full{width:100%}
   </div>
   <label>Data delle partite</label>
   <input type="date" id="multipleDate">
-  <label>Profilo di rischio</label>
-  <select id="multipleMode">
-   <option value="prudente">Prudente · soglia 75%</option>
-   <option value="equilibrata" selected>Equilibrata · soglia 65%</option>
-   <option value="rischiosa">Rischiosa · soglia 55%</option>
-  </select>
+  <label>Metodo di selezione</label>
+  <div class="muted" style="margin:8px 0 14px">Nessuna soglia minima: il sistema seleziona gli eventi disponibili con le probabilità stimate più alte.</div>
   <label>Numero massimo di selezioni</label>
   <select id="multipleCount">
    <option value="3">3 selezioni</option>
@@ -751,7 +747,7 @@ function renderMultiplesResult(result){
   ?result.multiples
   :[{number:1,selections:result.selections||[],combined_probability:result.naive_combined_probability}];
  if(!multiples.some(m=>m.selections&&m.selections.length)){
-  box.innerHTML='<div class="empty">Nessuna selezione supera la soglia impostata. Prova un altro profilo o una data diversa.</div>';
+  box.innerHTML='<div class="empty">Nessun evento disponibile. Controlla la data, i dati storici e il collegamento alle quote Sisal.</div>';
   return;
  }
  let html='<div class="analysisNote"><strong>2 MULTIPLE PIÙ PROBABILI · '+escapeHtml(result.mode)+'</strong><br>Partite analizzate: '+result.diagnostics.fixtures_analyzed+' · Mercati statistici disponibili: '+result.diagnostics.stats_markets_available+'<br>Le due multiple sono costruite senza condividere partite, per ridurre la correlazione.</div>';
@@ -778,7 +774,7 @@ function renderMultiplesResult(result){
 
 async function generateMultiples(){
  const date=document.getElementById("multipleDate").value;
- const mode=document.getElementById("multipleMode").value;
+ const mode="rischiosa";
  const count=document.getElementById("multipleCount").value;
  const box=document.getElementById("multipleResult");
  const button=document.getElementById("generateMultiplesButton");
