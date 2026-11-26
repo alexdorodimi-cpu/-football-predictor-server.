@@ -957,7 +957,8 @@ async function startMultiLeagueValidation(){
   out.textContent="Job avviato. ID: "+(data.job_id||data.job?.id||"")+"\nMonitoraggio in corso..."; 
   let pollCount=0;
   async function poll(){
-   const r=await fetch("/api/model/optimizer/batch/status",{headers:{Authorization:"Bearer "+token}});
+   try{
+   const r=await fetch("/api/model/optimizer/batch/status",{headers:{Authorization:"Bearer "+token},signal:AbortSignal.timeout(15000)});
    const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||"Errore stato job");
    const j=d.job;if(!j){out.textContent="Nessun job presente.";return;}
    const lines=["🧪 VALIDAZIONE AUTOMATICA MULTI-CAMPIONATO","Configurazione: window 25 | decay 1 | venue 0.1 | holdout 250","Stato: "+j.status,"Progressi: "+(j.processed||0)+"/"+(j.total||"?"),"Fase: "+(j.phase||"—"),"Campionato attuale: "+(j.current||"—"),"Completati: "+(j.completed?.length||0),"Falliti: "+(j.failed?.length||0),...(j.error?["ERRORE JOB: "+j.error]:[]),"","Risultati salvati nel browser durante il monitoraggio."];
@@ -968,6 +969,10 @@ async function startMultiLeagueValidation(){
    try{localStorage.setItem("predictor_multileague_candidate_25_1_01",JSON.stringify(j));}catch(e){}
    if(["completed","completed_with_errors","failed"].includes(j.status)){out.textContent+="\n\n🏁 JOB TERMINATO.";return;}
    pollCount++;setTimeout(poll,5000);
+   }catch(pollError){
+    out.textContent+="\n\n⚠️ Monitoraggio temporaneamente non disponibile: "+pollError.message+"\nRiprovo tra 5 secondi…";
+    setTimeout(poll,5000);
+   }
   }
   poll();
  }catch(e){out.textContent="Errore avvio/monitoraggio: "+e.message;}
