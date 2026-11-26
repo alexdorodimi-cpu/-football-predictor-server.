@@ -749,26 +749,32 @@ function renderAnalysis(home,away,homeStats,awayStats,prediction,predictionError
 
 function renderMultiplesResult(result){
  const box=document.getElementById("multipleResult");
- if(!result.selections||!result.selections.length){
+ const multiples=Array.isArray(result.multiples)&&result.multiples.length
+  ?result.multiples
+  :[{number:1,selections:result.selections||[],combined_probability:result.naive_combined_probability}];
+ if(!multiples.some(m=>m.selections&&m.selections.length)){
   box.innerHTML='<div class="empty">Nessuna selezione supera la soglia impostata. Prova un altro profilo o una data diversa.</div>';
   return;
  }
- let html='<div class="analysisNote"><strong>'+result.selected_selections+' selezioni · '+escapeHtml(result.mode)+'</strong><br>Partite analizzate: '+result.diagnostics.fixtures_analyzed+' · Mercati statistici disponibili: '+result.diagnostics.stats_markets_available+'</div>';
- result.selections.forEach((item,index)=>{
-  html+='<div class="match" style="margin-top:9px"><div class="match-top"><span class="league">'+(index+1)+'. '+escapeHtml(item.league||"Campionato")+'</span><strong>'+Number(item.probability).toFixed(1)+'%</strong></div><div class="teams">'+escapeHtml(item.home_team)+' - '+escapeHtml(item.away_team)+'</div><div class="match-bottom"><span>'+escapeHtml(item.label||item.market)+'</span><span class="muted">'+escapeHtml(item.source)+'</span></div></div>';
+ let html='<div class="analysisNote"><strong>2 MULTIPLE PIÙ PROBABILI · '+escapeHtml(result.mode)+'</strong><br>Partite analizzate: '+result.diagnostics.fixtures_analyzed+' · Mercati statistici disponibili: '+result.diagnostics.stats_markets_available+'<br>Le due multiple sono costruite senza condividere partite, per ridurre la correlazione.</div>';
+ multiples.forEach((multiple,mi)=>{
+  const picks=multiple.selections||[];
+  html+='<div class="sectionTitle">🎯 MULTIPLA '+(mi+1)+' · '+picks.length+' selezioni · Probabilità combinata teorica '+Number(multiple.combined_probability||0).toFixed(2)+'%</div>';
+  if(!picks.length){html+='<div class="empty">Non ci sono abbastanza eventi indipendenti per costruire la seconda multipla con la soglia scelta.</div>';return;}
+  picks.forEach((item,index)=>{
+   html+='<div class="match" style="margin-top:9px"><div class="match-top"><span class="league">'+(index+1)+'. '+escapeHtml(item.league||"Campionato")+'</span><strong>'+Number(item.probability).toFixed(1)+'%</strong></div><div class="teams">'+escapeHtml(item.home_team)+' - '+escapeHtml(item.away_team)+'</div><div class="match-bottom"><span>'+escapeHtml(item.label||item.market)+'</span><span class="muted">Quota Sisal: '+(item.sisal_odds?Number(item.sisal_odds).toFixed(2):"N/D")+'</span></div></div>';
+  });
  });
  if(Array.isArray(result.exact_score_options)&&result.exact_score_options.length){
-  html+='<div class="sectionTitle">🎯 RISULTATI ESATTI PER MULTIPLE — PROBABILITÀ MODELLO</div>';
-  html+='<p class="muted">Queste opzioni sono calcolate dal modello e non sono incluse nella multipla principale perché il feed Sisal non fornisce quote esatte verificate.</p>';
+  html+='<div class="sectionTitle">🎯 RISULTATI ESATTI — OPZIONI MODELLO</div>';
+  html+='<p class="muted">Opzioni calcolate dal modello, non incluse nelle multiple perché non sono disponibili quote esatte verificate.</p>';
   result.exact_score_options.forEach(match=>{
    html+='<div class="match"><div class="match-top"><span class="league">'+escapeHtml(match.league||"Campionato")+'</span></div><div class="teams">'+escapeHtml(match.home_team)+' - '+escapeHtml(match.away_team)+'</div>';
-   (match.options||[]).forEach(score=>{
-    html+='<div class="exactScore"><span>Risultato '+escapeHtml(score.score)+'</span><strong>'+Number(score.probability).toFixed(1)+'%</strong></div>';
-   });
+   (match.options||[]).forEach(score=>{html+='<div class="exactScore"><span>Risultato '+escapeHtml(score.score)+'</span><strong>'+Number(score.probability).toFixed(1)+'%</strong></div>';});
    html+='</div>';
   });
  }
- html+='<p class="muted">Probabilità combinata teorica: '+Number(result.naive_combined_probability||0).toFixed(2)+'%. Non tiene conto delle correlazioni.</p>';
+ html+='<p class="muted">Le probabilità combinate sono stime semplificate basate sul prodotto delle probabilità individuali; non sono garanzie.</p>';
  box.innerHTML=html;
 }
 
