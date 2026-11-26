@@ -4817,24 +4817,32 @@ app.get(
         diagnostics.stats_markets_available = 0;
       }
 
-      // Ordina per probabilità, poi limita mercati ripetuti della stessa partita.
+      // Crea due multiple distinte: ciascuna usa al massimo un evento per partita.
+      // La seconda esclude tutte le partite della prima, riducendo la correlazione tra le due multiple.
       candidates.sort((a, b) => b.probability - a.probability);
-      const selected = [];
-      const perMatch = new Map();
-      const marketKeys = new Set();
-      for (const item of candidates) {
-        if (selected.length >= maxSelections) break;
-        const count = perMatch.get(item.match_id) || 0;
-        const uniqueKey = `${item.match_id}:${item.market}`;
-        if (count >= profile.maxPerMatch || marketKeys.has(uniqueKey)) continue;
-        selected.push(item);
-        perMatch.set(item.match_id, count + 1);
-        marketKeys.add(uniqueKey);
-      }
-
-      const naiveCombinedProbability = selected.length
-        ? selected.reduce((total, item) => total * item.probability / 100, 1) * 100
-        : 0;
+      const buildPortfolio = (excludedMatchIds = new Set()) => {
+        const picks = [];
+        const usedMatches = new Set(excludedMatchIds);
+        const usedMarkets = new Set();
+        for (const item of candidates) {
+          if (picks.length >= maxSelections) break;
+          if (usedMatches.has(String(item.match_id))) continue;
+          const key = `${item.match_id}:${item.market}`;
+          if (usedMarkets.has(key)) continue;
+          picks.push(item);
+          usedMatches.add(String(item.match_id));
+          usedMarkets.add(key);
+        }
+        const combined = picks.length
+          ? picks.reduce((total, item) => total * item.probability / 100, 1) * 100
+          : 0;
+        return { selections: picks, combined_probability: Number(combined.toFixed(4)), match_ids: [...usedMatches] };
+      };
+      const portfolio1 = buildPortfolio();
+      const portfolio2 = buildPortfolio(new Set(portfolio1.match_ids));
+      // Mantiene selections come alias della prima multipla per compatibilità UI/API.
+      const selected = portfolio1.selections;
+      const naiveCombinedProbability = portfolio1.combined_probability;
 
       res.json({
         ok: true,
@@ -4850,6 +4858,10 @@ app.get(
         selected_selections: selected.length,
         naive_combined_probability: Number(naiveCombinedProbability.toFixed(4)),
         selections: selected,
+        multiples: [
+          { number: 1, selections: portfolio1.selections, combined_probability: portfolio1.combined_probability },
+          { number: 2, selections: portfolio2.selections, combined_probability: portfolio2.combined_probability, independent_matches_from_multiple_1: true }
+        ],
         exact_score_options: exactScoreOptions,
         diagnostics,
         warning:
