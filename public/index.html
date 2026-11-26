@@ -603,11 +603,10 @@ function renderPrediction(prediction,predictionError){
   ${marketCard("No Goal","btts_no",p,reliability)}
  </div>
 
- <div class="sectionTitle">RISULTATI ESATTI PIÙ PROBABILI</div>`;
+ <div class="sectionTitle">RISULTATI ESATTI — TOP 5</div>
 
  const exactScores=Array.isArray(prediction.exact_scores)
   ?prediction.exact_scores:[];
-
  if(exactScores.length){
   exactScores.forEach(item=>{
    html+=`
@@ -620,8 +619,25 @@ function renderPrediction(prediction,predictionError){
   html+='<div class="predictionError">Risultati esatti non disponibili.</div>';
  }
 
+ <div class="sectionTitle">CALCI D'ANGOLO — PROBABILITÀ</div>
+ <div class="marketGrid">
+  ${marketCard("Over 8.5 corner","corners_total_over_8_5",p,reliability)}
+  ${marketCard("Under 8.5 corner","corners_total_under_8_5",p,reliability)}
+  ${marketCard("Over 9.5 corner","corners_total_over_9_5",p,reliability)}
+  ${marketCard("Under 9.5 corner","corners_total_under_9_5",p,reliability)}
+  ${marketCard("Over 10.5 corner","corners_total_over_10_5",p,reliability)}
+  ${marketCard("Under 10.5 corner","corners_total_under_10_5",p,reliability)}
+ </div>
 
- html+=`
+ <div class="sectionTitle">FALLI — PROBABILITÀ</div>
+ <div class="marketGrid">
+  ${marketCard("Over 19.5 falli","fouls_total_over_19_5",p,reliability)}
+  ${marketCard("Under 19.5 falli","fouls_total_under_19_5",p,reliability)}
+  ${marketCard("Over 21.5 falli","fouls_total_over_21_5",p,reliability)}
+  ${marketCard("Under 21.5 falli","fouls_total_under_21_5",p,reliability)}
+  ${marketCard("Over 23.5 falli","fouls_total_over_23_5",p,reliability)}
+  ${marketCard("Under 23.5 falli","fouls_total_under_23_5",p,reliability)}
+ </div>
  <div class="modelInfo">
   Modello: ${escapeHtml(prediction.model||"Poisson")}<br>
   Campioni analizzati: casa ${escapeHtml(samples.home??"N/D")} ·
