@@ -4669,10 +4669,9 @@ app.get(
       // Whitelist iniziale Sisal: mercati standard elaborabili dal modello Poisson.
       // Mercati speciali e statistiche non verificate vengono esclususi.
       const maxMatches = Math.min(Math.max(Number(req.query.max_matches) || 10, 1), 20);
-      const minProbability = Math.min(
-        Math.max(Number(req.query.min_probability) || profile.minProbability, 50),
-        95
-      );
+      // Nessuna soglia minima di probabilità: ordina tutti gli eventi disponibili
+      // per probabilità stimata decrescente e seleziona i più alti.
+      const minProbability = 0;
       const maxSelections = Math.min(
         Math.max(Number(req.query.max_selections) || profile.maxSelections, 1),
         10
@@ -4788,7 +4787,7 @@ app.get(
           const odds = oddsKey ? sisalEvent.markets[oddsKey] : null;
           if (!Number.isFinite(Number(odds)) || Number(odds) <= 1) return;
           const value = Number(probability);
-          if (!Number.isFinite(value) || value < minProbability || value > 100) return;
+          if (!Number.isFinite(value) || value < 0 || value > 100) return;
           const pair = pairedMarkets[market] || [];
           const pairOdds = pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1);
           const rawImplied = 1 / Number(odds);
