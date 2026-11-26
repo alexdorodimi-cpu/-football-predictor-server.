@@ -332,7 +332,7 @@ button.full{width:100%}
   </div>
   <label>Token di accesso personale</label>
   <input id="token" type="password" placeholder="Inserisci il tuo access token">
-  <button class="full" onclick="saveToken()">SALVA ACCESSO</button>
+  <button id="saveTokenButton" class="full" type="button" onclick="saveToken()">SALVA ACCESSO</button>
   <p class="muted">La chiave API PitchAPI rimane protetta sul server.</p>
  </div>
 
@@ -420,15 +420,23 @@ document.getElementById("dateLabel").textContent=
 document.getElementById("multipleDate").value=document.getElementById("date").value;
 
 function saveToken(){
- const token=tokenInput.value.trim();
- if(!token){
-  message.textContent="Inserisci il token.";
-  return;
+ const button=document.getElementById("saveTokenButton");
+ try{
+  const token=document.getElementById("token").value.trim();
+  if(!token){
+   message.textContent="⚠️ Inserisci il token.";
+   return;
+  }
+  // Feedback immediato per confermare che il click è arrivato.
+  message.textContent="⏳ Click ricevuto. Salvataggio token...";
+  if(button){button.disabled=true;button.textContent="VERIFICA IN CORSO...";}
+  localStorage.setItem("predictor_token",token);
+  message.textContent="● Token salvato. Verifica accesso al server...";
+  checkServer();
+ }catch(error){
+  message.textContent="❌ Errore nel pulsante: "+(error?.message||error);
+  if(button){button.disabled=false;button.textContent="SALVA ACCESSO";}
  }
- localStorage.setItem("predictor_token",token);
- tokenInput.value=token;
- message.textContent="● Token salvato. Verifica accesso in corso...";
- checkServer();
 }
 
 async function api(path){
@@ -457,6 +465,7 @@ async function api(path){
 }
 
 async function checkServer(){
+ const saveButton=document.getElementById("saveTokenButton");
  message.textContent="Caricamento campionati...";
  try{
   const result=await api("/api/leagues");
@@ -493,6 +502,8 @@ async function checkServer(){
   message.textContent="● Server collegato! "+(select.options.length-1)+" campionati caricati.";
  }catch(e){
   message.textContent="❌ "+e.message;
+ }finally{
+  if(saveButton){saveButton.disabled=false;saveButton.textContent="SALVA ACCESSO";}
  }
 }
 
