@@ -4733,21 +4733,14 @@ app.get(
         const season = String(match.season);
         const cacheKey = `${leagueId}_${season}`;
 
-        if (!historyCache[cacheKey]) {
-          const { data, error: historyError } = await supabase
-            .from("matches")
-            .select("*")
-            .eq("league_id", leagueId)
-            .eq("season", season)
-            .not("home_goals", "is", null)
-            .not("away_goals", "is", null)
-            .order("match_date", { ascending: false })
-            .limit(500);
-          if (historyError) throw historyError;
-          historyCache[cacheKey] = data || [];
+        if (!historyCache[leagueId]) {
+          // Usa lo stesso recupero storico del pronostico partita singola:
+          // tutte le stagioni della competizione, paginate, senza limitarsi
+          // alla stagione corrente (spesso troppo corta per squadre europee).
+          historyCache[leagueId] = await getLeagueMatchesFromDatabase(leagueId);
         }
 
-        const history = historyCache[cacheKey];
+        const history = historyCache[leagueId];
         const prediction = calculatePrediction(match, history);
         if (!prediction?.probabilities) {
           diagnostics.skipped_insufficient_data++;
