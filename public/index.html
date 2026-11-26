@@ -770,7 +770,7 @@ function renderMultiplesResult(result){
    html+='<div class="match" style="margin-top:9px"><div class="match-top"><span class="league">'+(index+1)+'. '+escapeHtml(item.league||"Campionato")+'</span><strong>'+Number(item.probability).toFixed(1)+'%</strong></div><div class="teams">'+escapeHtml(item.home_team)+' - '+escapeHtml(item.away_team)+'</div><div class="match-bottom"><span>'+escapeHtml(item.label||item.market)+'</span><span class="muted">Sisal: '+(item.sisal_odds?Number(item.sisal_odds).toFixed(2):"N/D")+' · Migliore: '+(item.external_odds?Number(item.external_odds.odds).toFixed(2)+" ("+escapeHtml(item.external_odds.bookmaker)+")":"N/D")+' · EV: '+(item.expected_value_percent!==null&&item.expected_value_percent!==undefined?Number(item.expected_value_percent).toFixed(1)+"%":"N/D")+'</span></div></div>';
   });
  });
- if(Array.isArray(result.exact_score_options)&&result.exact_score_options.length){
+ if(result.diagnostics){const d=result.diagnostics;html+='<div class="sectionTitle">📡 DIAGNOSTICA QUOTE ODSS</div><div class="empty">Feed: '+(d.odss_enabled?"attivo":"non attivo")+' · Record ricevuti: '+Number(d.odss_events_received||0)+' · Partite abbinate: '+Number(d.odss_events_matched||0)+' · Record feed: '+Number(d.odss_provider_count||0)+(d.odss_error?" · Errore: "+escapeHtml(d.odss_error):"")+(d.odss_quota_remaining?" · Quota residua: "+escapeHtml(d.odss_quota_remaining):"")+'</div>';}\nif(Array.isArray(result.exact_score_options)&&result.exact_score_options.length){
   html+='<div class="sectionTitle">🎯 RISULTATI ESATTI — OPZIONI MODELLO</div>';
   html+='<p class="muted">Opzioni calcolate dal modello, non incluse nelle multiple perché non sono disponibili quote esatte verificate.</p>';
   result.exact_score_options.forEach(match=>{
