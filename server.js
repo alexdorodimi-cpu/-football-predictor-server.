@@ -4747,7 +4747,14 @@ app.get(
         fixtures_matched_sisal: 0,
         fixtures_without_sisal_match: 0,
         skipped_insufficient_data: 0,
-        stats_markets_available: 0
+        stats_markets_available: 0,
+        odss_enabled: Boolean(externalOddsFeed.enabled),
+        odss_events_received: Number(externalOddsFeed.returned||externalOddsFeed.events?.length||0),
+        odss_events_matched: 0,
+        odss_provider_count: Number(externalOddsFeed.count||0),
+        odss_error: externalOddsFeed.error||externalOddsFeed.reason||null,
+        odss_partial_sources: externalOddsFeed.partial_sources||[],
+        odss_quota_remaining: externalOddsFeed.quota_remaining||null
       };
 
       for (const match of (fixtures || []).slice(0, maxMatches)) {
@@ -4785,6 +4792,7 @@ app.get(
         // Sisal è opzionale: genera candidati dalle probabilità del modello anche senza quote.
         const sisalEvent = sisalData.available ? findSisalEventForFixture(sisalData.events, match) : null;
         const externalEvent=externalOddsFeed.enabled?findOdssEvent(externalOddsFeed.events,match):null;
+        if(externalEvent) diagnostics.odss_events_matched=(diagnostics.odss_events_matched||0)+1;
         if (sisalEvent) {
           diagnostics.fixtures_matched_sisal = (diagnostics.fixtures_matched_sisal || 0) + 1;
         } else {
@@ -4823,6 +4831,8 @@ app.get(
             market, label, probability: Number(value.toFixed(2)),
             model_probability: Number(value.toFixed(2)),
             sisal_odds: odds === null ? null : Number(odds.toFixed(2)),
+            best_external_odds: externalPrice?.odds ?? null,
+            external_bookmaker: externalPrice?.bookmaker ?? null,
             market_probability: marketProbability === null ? null : Number(marketProbability.toFixed(2)),
             probability_edge: marketProbability === null ? null : Number((value - marketProbability).toFixed(2)),
             external_odds: externalPrice,
@@ -4915,7 +4925,7 @@ async function getOdssOddsForDate(date){
  const p=new URLSearchParams({sport:"calcio",commence_from:from,commence_to:to,playable_it:"true",limit:"500",state:"prematch",content:"match"});
  const r=await fetch("https://odss-api.com/api/v1/odds?"+p,{headers:{"x-api-key":ODSS_API_KEY},signal:AbortSignal.timeout(15000)});
  if(!r.ok)throw new Error("odss-api HTTP "+r.status);
- const j=await r.json();return {enabled:true,events:Array.isArray(j.odds)?j.odds:[],provider:"odss-api"};
+ const j=await r.json();return {enabled:true,events:Array.isArray(j.odds)?j.odds:[],provider:"odss-api",count:Number(j.count||0),returned:Number(j.returned||0),generated_at:j.generated_at||null,partial_sources:j.partial_sources||[],quota_remaining:r.headers.get("x-quota-remaining")||r.headers.get("x-ratelimit-remaining")||null};
 }
 function findOdssEvent(events,match){
  const h=normalizeExternalTeamName(match.home_team),a=normalizeExternalTeamName(match.away_team);
