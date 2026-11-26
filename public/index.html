@@ -960,7 +960,7 @@ async function startMultiLeagueValidation(){
    const r=await fetch("/api/model/optimizer/batch/status",{headers:{Authorization:"Bearer "+token}});
    const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||"Errore stato job");
    const j=d.job;if(!j){out.textContent="Nessun job presente.";return;}
-   const lines=["🧪 VALIDAZIONE AUTOMATICA MULTI-CAMPIONATO","Configurazione: window 25 | decay 1 | venue 0.1 | holdout 250","Stato: "+j.status,"Progressi: "+(j.processed||0)+"/"+(j.total||"?"),"Campionato attuale: "+(j.current||"—"),"Completati: "+(j.completed?.length||0),"Falliti: "+(j.failed?.length||0),"","Risultati salvati nel browser durante il monitoraggio."];
+   const lines=["🧪 VALIDAZIONE AUTOMATICA MULTI-CAMPIONATO","Configurazione: window 25 | decay 1 | venue 0.1 | holdout 250","Stato: "+j.status,"Progressi: "+(j.processed||0)+"/"+(j.total||"?"),"Fase: "+(j.phase||"—"),"Campionato attuale: "+(j.current||"—"),"Completati: "+(j.completed?.length||0),"Falliti: "+(j.failed?.length||0),...(j.error?["ERRORE JOB: "+j.error]:[]),"","Risultati salvati nel browser durante il monitoraggio."];
    for(const x of (j.completed||[])){const t=x.result?.test_comparison||{};lines.push("\n"+x.league_name+" ["+x.league_id+"]");for(const m of ["1X2","over_1_5","over_2_5","over_3_5","over_4_5","btts"]){const z=t[m];if(z)lines.push(m+": Acc "+z.baseline.accuracy_percent+"% → "+z.optimized.accuracy_percent+"% ("+z.accuracy_delta_pp+" pp) | Brier "+z.baseline.brier+" → "+z.optimized.brier+" ("+z.brier_delta+")");}
    }
    if(j.failed?.length){lines.push("\n❌ Errori:");for(const x of j.failed)lines.push(x.league_name+": "+x.error);}
