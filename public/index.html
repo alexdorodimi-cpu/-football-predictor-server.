@@ -426,12 +426,15 @@ function saveToken(){
   return;
  }
  localStorage.setItem("predictor_token",token);
- message.textContent="● Token salvato sul dispositivo.";
+ tokenInput.value=token;
+ message.textContent="● Token salvato. Verifica accesso in corso...";
+ checkServer();
 }
 
 async function api(path){
- const token=localStorage.getItem("predictor_token");
+ const token=(localStorage.getItem("predictor_token")||tokenInput.value||"").trim();
  if(!token) throw new Error("Inserisci prima il token di accesso.");
+ localStorage.setItem("predictor_token",token);
 
  const response=await fetch(path,{
   headers:{"Authorization":"Bearer "+token}
@@ -445,6 +448,9 @@ async function api(path){
  }
 
  if(!response.ok||data.ok===false){
+  if(response.status===401){
+   throw new Error("Token non valido. Controlla il token e salvalo di nuovo.");
+  }
   throw new Error(data.error||"Errore del server.");
  }
  return data;
@@ -453,33 +459,40 @@ async function api(path){
 async function checkServer(){
  message.textContent="Caricamento campionati...";
  try{
-  const result=await api("/api/status");
+  const result=await api("/api/leagues");
   const select=document.getElementById("league");
   select.innerHTML='<option value="all">Tutti i campionati</option>';
 
   const leagues=
-   result?.data?.data?.leagues||
+   result?.response?.data?.leagues||
    result?.data?.leagues||
    result?.leagues||
    [];
 
+  if(!Array.isArray(leagues)||!leagues.length){
+   document.getElementById("leagueCount").textContent="0";
+   message.textContent="⚠️ Server raggiungibile, ma PitchAPI non ha restituito campionati. Riprova tra poco.";
+   return;
+  }
+
   leagues.sort((a,b)=>{
-   const nameA=(a.name+" "+(a.country_code||"")).toLowerCase();
-   const nameB=(b.name+" "+(b.country_code||"")).toLowerCase();
-   return nameA.localeCompare(nameB);
+   const nameA=(a.name||a.league_name||"")+" "+(a.country_code||a.country?.code||"");
+   const nameB=(b.name||b.league_name||"")+" "+(b.country_code||b.country?.code||"");
+   return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
   });
 
   leagues.forEach(league=>{
+   if(!league.id) return;
    const option=document.createElement("option");
    option.value=league.id;
-   option.textContent=league.name+" ("+(league.country_code||"")+")";
+   option.textContent=(league.name||league.league_name||"Campionato")+" ("+(league.country_code||league.country?.code||"")+")";
    select.appendChild(option);
   });
 
-  document.getElementById("leagueCount").textContent=leagues.length;
-  message.textContent="● Server collegato! "+leagues.length+" campionati caricati.";
+  document.getElementById("leagueCount").textContent=select.options.length-1;
+  message.textContent="● Server collegato! "+(select.options.length-1)+" campionati caricati.";
  }catch(e){
-  message.textContent="Errore: "+e.message;
+  message.textContent="❌ "+e.message;
  }
 }
 
