@@ -5189,8 +5189,8 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
     const valSize=Math.min(250,Math.max(100,Math.floor(preTest.length*0.25)));
     const validation=preTest.slice(-valSize),training=preTest.slice(0,-validation.length);
     if(training.length<100||validation.length<50||test.length<50)return res.status(422).json({ok:false,error:"Storico insufficiente per split temporale train/validation/test.",counts:{history:history.length,training:training.length,validation:validation.length,test:test.length}});
-    const configs=[];for(const w of [20,25,30])for(const d of [0.9,0.95,1])for(const vb of [0.1,0.2,0.3])configs.push({window:w,decay:d,venue_blend:vb});
-    const baseline={window:10,decay:0.75,venue_blend:0.7};
+    const configs=[];for(const w of [10,20,25,30])for(const d of [0.75,0.9,0.95,1])for(const vb of [0.1,0.3,0.5,0.7])for(const prior of [0,3,5])configs.push({window:w,decay:d,venue_blend:vb,prior_matches:prior});
+    const baseline={window:10,decay:0.75,venue_blend:0.7,prior_matches:3};
     const weighted=(vals,d)=>{if(!vals.length)return null;let s=0,ws=0;vals.forEach((v,i)=>{const w=Math.pow(d,i);s+=v*w;ws+=w;});return ws?s/ws:null;};
     const samples=(team,date,venue,source)=>{const t=String(team||"").toLowerCase();return source.filter(m=>new Date(m.match_date)<new Date(date)&&((venue==="home"?String(m.home_team||"").toLowerCase()===t:venue==="away"?String(m.away_team||"").toLowerCase()===t:String(m.home_team||"").toLowerCase()===t||String(m.away_team||"").toLowerCase()===t))).sort((a,b)=>new Date(b.match_date)-new Date(a.match_date)).map(m=>{const h=String(m.home_team||"").toLowerCase()===t;return{for:Number(h?m.home_goals:m.away_goals),against:Number(h?m.away_goals:m.home_goals)};});};
     const poisson=(l,k)=>{if(l<=0)return k===0?1:0;let f=1;for(let z=2;z<=k;z++)f*=z;return Math.exp(-l)*Math.pow(l,k)/f;};
@@ -5199,7 +5199,7 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
       const h=samples(match.home_team,date,"all",source).slice(0,cfg.window),a=samples(match.away_team,date,"all",source).slice(0,cfg.window),hv=samples(match.home_team,date,"home",source).slice(0,5),av=samples(match.away_team,date,"away",source).slice(0,5);if(h.length<5||a.length<5)return null;
       const hf=weighted(h.map(x=>x.for),cfg.decay),ha=weighted(h.map(x=>x.against),cfg.decay),af=weighted(a.map(x=>x.for),cfg.decay),aa=weighted(a.map(x=>x.against),cfg.decay);
       const hvf=hv.length>=3?weighted(hv.map(x=>x.for),cfg.decay):hf,hva=hv.length>=3?weighted(hv.map(x=>x.against),cfg.decay):ha,avf=av.length>=3?weighted(av.map(x=>x.for),cfg.decay):af,ava=av.length>=3?weighted(av.map(x=>x.against),cfg.decay):aa;
-      const shrink=(v,p,n)=>(v*n+p*3)/(n+3),hFor=shrink(hf,lh0,h.length),hAgainst=shrink(ha,la0,h.length),aFor=shrink(af,la0,a.length),aAgainst=shrink(aa,lh0,a.length);
+      const priorMatches=Math.max(0,Number(cfg.prior_matches??3)),shrink=(v,p,n)=>(v*n+p*priorMatches)/(n+priorMatches||1),hFor=shrink(hf,lh0,h.length),hAgainst=shrink(ha,la0,h.length),aFor=shrink(af,la0,a.length),aAgainst=shrink(aa,lh0,a.length);
       const hVFor=shrink(hvf,hFor,hv.length),hVAgainst=shrink(hva,hAgainst,hv.length),aVFor=shrink(avf,aFor,av.length),aVAgainst=shrink(ava,aAgainst,av.length);
       const oh=lh0*(hFor/lh0)*(aAgainst/la0),oa=la0*(aFor/la0)*(hAgainst/lh0),vh=lh0*(hVFor/lh0)*(aVAgainst/la0),va=la0*(aVFor/la0)*(hVAgainst/lh0);
       const lH=Math.max(.1,Math.min(4.5,(1-cfg.venue_blend)*oh+cfg.venue_blend*vh)),lA=Math.max(.1,Math.min(4.5,(1-cfg.venue_blend)*oa+cfg.venue_blend*va));
