@@ -4818,21 +4818,21 @@ app.get(
         diagnostics.stats_markets_available = 0;
       }
 
-      // Crea due multiple distinte: ciascuna usa al massimo un evento per partita.
-      // La seconda esclude tutte le partite della prima, riducendo la correlazione tra le due multiple.
+      // Regola: al massimo UN mercato per partita in ciascuna multipla.
+      // Mercati uguali su partite diverse sono consentiti.
+      // La seconda multipla evita le identiche selezioni della prima, ma può
+      // scegliere un mercato alternativo della stessa partita, essendo un ticket distinto.
       candidates.sort((a, b) => b.probability - a.probability);
-      const buildPortfolio = (excludedMatchIds = new Set()) => {
+      const buildPortfolio = (excludedSelectionKeys = new Set()) => {
         const picks = [];
-        const usedMatches = new Set(excludedMatchIds);
-        const usedMarkets = new Set();
+        const usedMatches = new Set();
         for (const item of candidates) {
           if (picks.length >= maxSelections) break;
-          if (usedMatches.has(String(item.match_id))) continue;
-          const key = `${item.match_id}:${item.market}`;
-          if (usedMarkets.has(key)) continue;
+          const matchId = String(item.match_id);
+          const selectionKey = String(item.match_id) + ":" + item.market;
+          if (usedMatches.has(matchId) || excludedSelectionKeys.has(selectionKey)) continue;
           picks.push(item);
-          usedMatches.add(String(item.match_id));
-          usedMarkets.add(key);
+          usedMatches.add(matchId);
         }
         const combined = picks.length
           ? picks.reduce((total, item) => total * item.probability / 100, 1) * 100
@@ -4840,7 +4840,8 @@ app.get(
         return { selections: picks, combined_probability: Number(combined.toFixed(4)), match_ids: [...usedMatches] };
       };
       const portfolio1 = buildPortfolio();
-      const portfolio2 = buildPortfolio(new Set(portfolio1.match_ids));
+      const portfolio1SelectionKeys = new Set(portfolio1.selections.map(item => String(item.match_id) + ":" + item.market));
+      const portfolio2 = buildPortfolio(portfolio1SelectionKeys);
       // Mantiene selections come alias della prima multipla per compatibilità UI/API.
       const selected = portfolio1.selections;
       const naiveCombinedProbability = portfolio1.combined_probability;
