@@ -5239,11 +5239,30 @@ async function runMultiLeagueJob(job) {
     job.finished_at = job.updated_at;
     return;
   }
-  const leagues = catalog.filter(x => x && x.id && x.name && !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)));
-  job.leagues = leagues.map(x => ({id:String(x.id),name:String(x.name)}));
+  const catalogLeagues = catalog.filter(x => x && x.id && x.name && !/women|femmin|femen|frauen|cup|coppa|pokal|copa|super cup/i.test(String(x.name)));
+  job.phase = "ranking_leagues_by_data";
+  job.current = "Selezione campionati con più storico nel database…";
+  job.updated_at = new Date().toISOString();
+  const leagueCounts = await mapWithConcurrency(catalogLeagues, 5, async league => {
+    try {
+      const { count, error } = await supabase.from("matches").select("id", { count: "exact", head: true }).eq("league_id", String(league.id));
+      if (error) throw error;
+      return { id:String(league.id), name:String(league.name), matches_count:Number(count || 0) };
+    } catch (e) {
+      return { id:String(league.id), name:String(league.name), matches_count:0, count_error:e.message };
+    }
+  });
+  const MIN_MATCHES_FOR_BATCH = 500;
+  const MAX_BATCH_LEAGUES = 30;
+  const leagues = leagueCounts
+    .filter(x => x.matches_count >= MIN_MATCHES_FOR_BATCH)
+    .sort((a,b) => b.matches_count - a.matches_count)
+    .slice(0, MAX_BATCH_LEAGUES);
+  job.selection = { method:"Supabase match count per league", minimum_matches:MIN_MATCHES_FOR_BATCH, maximum_leagues:MAX_BATCH_LEAGUES, catalog_leagues_checked:catalogLeagues.length, eligible_leagues:leagueCounts.filter(x=>x.matches_count>=MIN_MATCHES_FOR_BATCH).length, selected:leagues.map(x=>({id:x.id,name:x.name,matches_count:x.matches_count})), skipped_low_data:leagueCounts.filter(x=>x.matches_count<MIN_MATCHES_FOR_BATCH).length, count_errors:leagueCounts.filter(x=>x.count_error).length };
+  job.leagues = leagues.map(x => ({id:x.id,name:x.name,matches_count:x.matches_count}));
   job.total = leagues.length;
   job.phase = "testing_leagues";
-  job.current = leagues.length ? "Preparazione primo campionato…" : null;
+  job.current = leagues.length ? "Preparazione primo campionato…" : "Nessun campionato con almeno 500 partite nello storico.";
   job.updated_at = new Date().toISOString();
   for (const league of leagues) {
     if (job.completed.some(x => x.league_id === String(league.id))) continue;
