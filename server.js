@@ -4927,14 +4927,25 @@ async function getOdssOddsForDate(date){
  if(!r.ok)throw new Error("odss-api HTTP "+r.status);
  const j=await r.json();return {enabled:true,events:Array.isArray(j.odds)?j.odds:[],provider:"odss-api",count:Number(j.count||0),returned:Number(j.returned||0),generated_at:j.generated_at||null,partial_sources:j.partial_sources||[],quota_remaining:r.headers.get("x-quota-remaining")||r.headers.get("x-ratelimit-remaining")||null};
 }
+function splitOdssEventName(event){
+ const raw=String(event?.event||event?.name||event?.fixture||"").trim();
+ const parts=raw.split(/\\s+[-–—]\\s+/);
+ return parts.length===2?parts.map(x=>normalizeExternalTeamName(x)):[null,null];
+}
 function findOdssEvent(events,match){
  const h=normalizeExternalTeamName(match.home_team),a=normalizeExternalTeamName(match.away_team);
- return (events||[]).find(e=>normalizeExternalTeamName(e.home_team||"")===h&&normalizeExternalTeamName(e.away_team||"")===a)||null;
+ return (events||[]).find(e=>{
+  const eh=normalizeExternalTeamName(e.home_team||e.home||"");
+  const ea=normalizeExternalTeamName(e.away_team||e.away||"");
+  if(eh&&ea)return eh===h&&ea===a;
+  const [ph,pa]=splitOdssEventName(e);
+  return ph===h&&pa===a;
+ })||null;
 }
 function findBestOdssPrice(event,market){
  if(!event)return null;
  const wantedMarket=(["1","X","2"].includes(market))?"1x2":(market.startsWith("over_")||market.startsWith("under_"))?"ou":market.startsWith("btts_")?"btts":null;
- if(!wantedMarket||event.market!==wantedMarket)return null;
+ if(!wantedMarket||String(event.market||"").toLowerCase()!==wantedMarket)return null;
  const line=(market.startsWith("over_")||market.startsWith("under_"))?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):null;
  if(line!==null&&Number(event.line)!==line)return null;
  const outcome=market==="1"?"HOME":market==="X"?"DRAW":market==="2"?"AWAY":market.startsWith("over_")?"OVER":market.startsWith("under_")?"UNDER":market==="btts_yes"?"YES":"NO";
