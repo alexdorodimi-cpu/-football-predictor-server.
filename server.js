@@ -4945,7 +4945,7 @@ function findOdssEvent(events,match,market=null){
   const eh=normalizeExternalTeamName(e.home_team||e.home||"");
   const ea=normalizeExternalTeamName(e.away_team||e.away||"");
   if(eh&&ea)return eh===h&&ea===a;
-  const raw=String(e.event||e.name||e.fixture||"").trim().split(/\\s+[-–—]\\s+/);
+  const raw=String(e.event||e.name||e.fixture||"").trim().split(/\s+[-–—]\s+/);
   return raw.length===2&&normalizeExternalTeamName(raw[0])===h&&normalizeExternalTeamName(raw[1])===a;
  })||null;
 }
