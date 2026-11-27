@@ -4754,7 +4754,10 @@ app.get(
         odss_provider_count: Number(externalOddsFeed.count||0),
         odss_error: externalOddsFeed.error||externalOddsFeed.reason||null,
         odss_partial_sources: externalOddsFeed.partial_sources||[],
-        odss_quota_remaining: externalOddsFeed.quota_remaining||null,\n        odss_sample_event: externalOddsFeed.events?.[0] ? {event:externalOddsFeed.events[0].event||null,market:externalOddsFeed.events[0].market||null,line:externalOddsFeed.events[0].line??null,bookmakers_count:(externalOddsFeed.events[0].bookmakers||[]).length,bookmaker_keys:(externalOddsFeed.events[0].bookmakers||[]).slice(0,5).map(b=>b.key||b.name),outcomes_keys:Object.keys(externalOddsFeed.events[0].bookmakers?.[0]?.outcomes||{})} : null,\n        odss_markets_received:[...new Set((externalOddsFeed.events||[]).map(e=>e.market))],\n        odss_prices_available:(externalOddsFeed.events||[]).reduce((sum,e)=>sum+(e.bookmakers||[]).reduce((n,b)=>n+Object.values(b.outcomes||{}).filter(v=>Number(v)>1).length,0),0)
+        odss_quota_remaining: externalOddsFeed.quota_remaining||null,
+        odss_sample_event: externalOddsFeed.events?.[0] ? {event:externalOddsFeed.events[0].event||null,market:externalOddsFeed.events[0].market||null,line:externalOddsFeed.events[0].line??null,bookmakers_count:(externalOddsFeed.events[0].bookmakers||[]).length,bookmaker_keys:(externalOddsFeed.events[0].bookmakers||[]).slice(0,5).map(b=>b.key||b.name),outcomes_keys:Object.keys(externalOddsFeed.events[0].bookmakers?.[0]?.outcomes||{})} : null,
+        odss_markets_received:[...new Set((externalOddsFeed.events||[]).map(e=>e.market))],
+        odss_prices_available:(externalOddsFeed.events||[]).reduce((sum,e)=>sum+(e.bookmakers||[]).reduce((n,b)=>n+Object.values(b.outcomes||{}).filter(v=>Number(v)>1).length,0),0)
       };
 
       for (const match of (fixtures || []).slice(0, maxMatches)) {
@@ -4929,7 +4932,7 @@ async function getOdssOddsForDate(date){
 }
 function splitOdssEventName(event){
  const raw=String(event?.event||event?.name||event?.fixture||"").trim();
- const parts=raw.split(/\\s+[-–—]\\s+/);
+ const parts=raw.split(/\s+[-–—]\s+/);
  return parts.length===2?parts.map(x=>normalizeExternalTeamName(x)):[null,null];
 }
 function findOdssEvent(events,match,market=null){
