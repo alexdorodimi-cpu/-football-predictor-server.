@@ -4754,7 +4754,7 @@ app.get(
         odss_provider_count: Number(externalOddsFeed.count||0),
         odss_error: externalOddsFeed.error||externalOddsFeed.reason||null,
         odss_partial_sources: externalOddsFeed.partial_sources||[],
-        odss_quota_remaining: externalOddsFeed.quota_remaining||null
+        odss_quota_remaining: externalOddsFeed.quota_remaining||null,\n        odss_sample_event: externalOddsFeed.events?.[0] ? {event:externalOddsFeed.events[0].event||null,market:externalOddsFeed.events[0].market||null,line:externalOddsFeed.events[0].line??null,bookmakers_count:(externalOddsFeed.events[0].bookmakers||[]).length,bookmaker_keys:(externalOddsFeed.events[0].bookmakers||[]).slice(0,5).map(b=>b.key||b.name),outcomes_keys:Object.keys(externalOddsFeed.events[0].bookmakers?.[0]?.outcomes||{})} : null,\n        odss_markets_received:[...new Set((externalOddsFeed.events||[]).map(e=>e.market))],\n        odss_prices_available:(externalOddsFeed.events||[]).reduce((sum,e)=>sum+(e.bookmakers||[]).reduce((n,b)=>n+Object.values(b.outcomes||{}).filter(v=>Number(v)>1).length,0),0)
       };
 
       for (const match of (fixtures || []).slice(0, maxMatches)) {
@@ -4823,7 +4823,7 @@ app.get(
           const pairOdds = sisalEvent ? pair.map(key => Number(sisalEvent.markets[key])).filter(value => Number.isFinite(value) && value > 1) : [];
           const pairTotal = pairOdds.reduce((sum, odd) => sum + 1 / odd, 0);
           const marketProbability = odds !== null && pairTotal > 0 ? ((1 / odds) / pairTotal) * 100 : null;
-          const externalPrice = externalEvent ? findBestOdssPrice(externalEvent,market) : null;
+          const marketExternalEvent=externalOddsFeed.enabled?findOdssEvent(externalOddsFeed.events,match,market):null;\n          const externalPrice = marketExternalEvent ? findBestOdssPrice(marketExternalEvent,market) : null;
           const expectedValuePercent = externalPrice ? Number(((value/100*externalPrice.odds-1)*100).toFixed(2)) : null;
           candidates.push({
             match_id: match.id, league: match.league_name,
