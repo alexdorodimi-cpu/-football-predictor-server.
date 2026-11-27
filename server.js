@@ -5171,6 +5171,10 @@ app.get(
 // ==========================================
 
 app.get("/", (req, res) => {
+  // Evita che il browser mobile riutilizzi una vecchia interfaccia dopo i deploy.
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   res.sendFile(
     path.join(__dirname, "public", "index.html")
   );
@@ -5180,8 +5184,18 @@ app.get("/", (req, res) => {
 // FILE STATICI
 // ==========================================
 
+// L'HTML non deve rimanere in cache; asset statici possono essere gestiti normalmente.
 app.use(express.static(
-  path.join(__dirname, "public")
+  path.join(__dirname, "public"),
+  {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith(".html")) {
+        res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+        res.set("Pragma", "no-cache");
+        res.set("Expires", "0");
+      }
+    }
+  }
 ));
 
 app.get("/api/sync/automatic/status", (req, res) => {
