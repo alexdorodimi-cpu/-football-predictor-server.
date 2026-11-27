@@ -417,22 +417,33 @@ document.getElementById("dateLabel").textContent=
 
 document.getElementById("multipleDate").value=document.getElementById("date").value;
 
-function saveToken(){
+async function saveToken(){
  const button=document.getElementById("saveTokenButton");
+ const token=document.getElementById("token").value.trim();
+ if(!token){
+  message.textContent="⚠️ Inserisci il token.";
+  return;
+ }
  try{
-  const token=document.getElementById("token").value.trim();
-  if(!token){
-   message.textContent="⚠️ Inserisci il token.";
-   return;
-  }
-  // Feedback immediato per confermare che il click è arrivato.
-  message.textContent="⏳ Click ricevuto. Salvataggio token...";
+  message.textContent="⏳ Salvataggio e verifica token...";
   if(button){button.disabled=true;button.textContent="VERIFICA IN CORSO...";}
   localStorage.setItem("predictor_token",token);
-  message.textContent="● Token salvato. Verifica accesso al server...";
-  checkServer();
+  const saved=localStorage.getItem("predictor_token");
+  if(saved!==token)throw new Error("Il browser non ha conservato il token. Controlla le impostazioni di memoria/cookie del sito.");
+  await checkServer();
+  const diagnostic=await fetch("/api/auth-diagnostic",{headers:{Authorization:"Bearer "+token}});
+  const diag=await diagnostic.json();
+  if(!diagnostic.ok||!diag.ok)throw new Error("Diagnostica accesso non disponibile.");
+  if(!diag.serverTokenConfigured){
+   message.textContent="⚠️ Token salvato nel browser, ma PREDICTOR_ACCESS_TOKEN non risulta configurato su Render.";
+  }else if(!diag.tokenMatchesServer){
+   message.textContent="⚠️ Token salvato nel browser, ma NON corrisponde al token configurato su Render. Aggiorna il token corretto in Render Environment.";
+  }else{
+   message.textContent="✅ Token salvato nel browser e verificato: corrisponde al server. "+(document.getElementById("leagueCount").textContent||"");
+  }
  }catch(error){
-  message.textContent="❌ Errore nel pulsante: "+(error?.message||error);
+  message.textContent="❌ "+(error?.message||error);
+ }finally{
   if(button){button.disabled=false;button.textContent="SALVA ACCESSO";}
  }
 }
