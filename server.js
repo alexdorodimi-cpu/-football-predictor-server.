@@ -4932,14 +4932,18 @@ function splitOdssEventName(event){
  const parts=raw.split(/\\s+[-–—]\\s+/);
  return parts.length===2?parts.map(x=>normalizeExternalTeamName(x)):[null,null];
 }
-function findOdssEvent(events,match){
+function findOdssEvent(events,match,market=null){
  const h=normalizeExternalTeamName(match.home_team),a=normalizeExternalTeamName(match.away_team);
+ const wantedMarket=market===null?null:(["1","X","2"].includes(market)?"1x2":(market.startsWith("over_")||market.startsWith("under_"))?"ou":market.startsWith("btts_")?"btts":null);
+ const wantedLine=market&&(market.startsWith("over_")||market.startsWith("under_"))?Number(market.slice(market.indexOf("_")+1).replace("_",".5")):null;
  return (events||[]).find(e=>{
+  if(wantedMarket&&String(e.market||"").toLowerCase()!==wantedMarket)return false;
+  if(wantedLine!==null&&Number(e.line)!==wantedLine)return false;
   const eh=normalizeExternalTeamName(e.home_team||e.home||"");
   const ea=normalizeExternalTeamName(e.away_team||e.away||"");
   if(eh&&ea)return eh===h&&ea===a;
-  const [ph,pa]=splitOdssEventName(e);
-  return ph===h&&pa===a;
+  const raw=String(e.event||e.name||e.fixture||"").trim().split(/\\s+[-–—]\\s+/);
+  return raw.length===2&&normalizeExternalTeamName(raw[0])===h&&normalizeExternalTeamName(raw[1])===a;
  })||null;
 }
 function findBestOdssPrice(event,market){
