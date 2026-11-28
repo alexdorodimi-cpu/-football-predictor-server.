@@ -2734,7 +2734,7 @@ app.post("/api/backtest/bulk/start/:leagueId", requireDatabase, async (req,res) 
   if(!allLeagues&&!/^l_[A-Za-z0-9_-]+$/.test(leagueId))return res.status(400).json({ok:false,error:"ID campionato non valido."});
   const allSeasons=String(req.query.all_seasons||"").toLowerCase()==="true";
   const season=allSeasons?"ALL":String(req.query.season||"2026/2027");
-  if(!allSeasons&&!/^\\d{4}\\/\\d{4}$/.test(season))return res.status(400).json({ok:false,error:"Stagione non valida. Usa YYYY/YYYY."});
+  if(!allSeasons&&!/^\d{4}\/\d{4}$/.test(season))return res.status(400).json({ok:false,error:"Stagione non valida. Usa YYYY/YYYY."});
   const maxMatches=Math.min(1000,Math.max(1,Number.parseInt(req.query.matches||"1000",10)||1000));
   const batchSize=Math.min(20,Math.max(5,Number.parseInt(req.query.batch_size||"20",10)||20));
   let leagues=[];
