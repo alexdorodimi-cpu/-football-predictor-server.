@@ -40,11 +40,11 @@ const ACCESS_TOKEN = String(process.env.PREDICTOR_ACCESS_TOKEN || "").trim();
 const RANDOM_FOREST_ENABLED = String(process.env.ENABLE_RANDOM_FOREST || "").toLowerCase() === "true";
  // Parametri del modello regolabili da Render senza modificare il codice.
  // I valori di default mantengono il comportamento attuale.
- const MODEL_PRIOR_MATCHES = Math.max(0, Math.min(20, Number(process.env.MODEL_PRIOR_MATCHES || 3)));
- const MODEL_VENUE_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_VENUE_BLEND || 0.1)));
- const MODEL_XG_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_XG_BLEND || 0.25)));
- const MODEL_HISTORY_WINDOW = Math.max(5, Math.min(30, Number(process.env.MODEL_HISTORY_WINDOW || 25)));
- const MODEL_DECAY = Math.max(0.5, Math.min(1, Number(process.env.MODEL_DECAY || 1)));
+ let MODEL_PRIOR_MATCHES = Math.max(0, Math.min(20, Number(process.env.MODEL_PRIOR_MATCHES || 3)));
+ let MODEL_VENUE_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_VENUE_BLEND || 0.1)));
+ let MODEL_XG_BLEND = Math.max(0, Math.min(1, Number(process.env.MODEL_XG_BLEND || 0.25)));
+ let MODEL_HISTORY_WINDOW = Math.max(5, Math.min(30, Number(process.env.MODEL_HISTORY_WINDOW || 25)));
+ let MODEL_DECAY = Math.max(0.5, Math.min(1, Number(process.env.MODEL_DECAY || 1)));
 
 
 app.use("/api/", rateLimit({
@@ -5351,6 +5351,47 @@ app.post("/api/sync/automatic/run", requireSportApi, requireDatabase, async (req
 });
  
 
+
+// AUTOMATIC MODEL LEARNING: validation selects; chronological test is promotion gate.
+let automaticLearningJob=null, automaticLearningLastRun=null, automaticLearningLastReport=null;
+async function runAutomaticLearning(){
+ if(!supabase||!PITCHAPI_KEY||automaticLearningJob?.status==="running")return null;
+ const job=automaticLearningJob={id:"learn-"+Date.now(),status:"running",started_at:new Date().toISOString(),leagues_tested:[],errors:[]};
+ try{
+  const catalog=await getEuropeanLeagueCatalog();
+  const patterns=[/premier league/i,/serie a/i,/la liga|primera division/i,/bundesliga/i,/ligue 1/i,/eredivisie/i,/primeira liga|liga portugal/i,/pro league|jupiler pro league/i,/super lig|super league/i,/scottish premiership/i];
+  const leagues=catalog.filter(x=>x?.id&&patterns.some(p=>p.test(String(x.name||"")))).slice(0,8);
+  const cfgs=[],deltas=[];
+  for(const league of leagues){
+   try{
+    const u="http://127.0.0.1:"+PORT+"/api/model/optimizer/"+encodeURIComponent(String(league.id))+"?limit=250";
+    const r=await fetch(u,{headers:{Authorization:"Bearer "+ACCESS_TOKEN},signal:AbortSignal.timeout(90000)});
+    const b=await r.json();if(!r.ok||!b?.ok)throw new Error(b?.error||"HTTP "+r.status);
+    const ds=Object.values(b.test_comparison||{}).map(x=>Number(x?.brier_delta)).filter(Number.isFinite);
+    const avg=ds.length?ds.reduce((a,v)=>a+v,0)/ds.length:null;
+    job.leagues_tested.push({league_id:String(league.id),name:league.name,selected_config:b.selected_config,mean_test_brier_delta:avg,markets:ds.length});
+    if(b.selected_config&&avg!==null){cfgs.push(b.selected_config);deltas.push(avg);}
+   }catch(e){job.errors.push({league:league.name,error:e.message});}
+   await new Promise(r=>setTimeout(r,500));
+  }
+  if(cfgs.length>=3){
+   const med=a=>{a=a.slice().sort((x,y)=>x-y);return a[Math.floor(a.length/2)];};
+   const candidate={window:med(cfgs.map(x=>Number(x.window))),decay:med(cfgs.map(x=>Number(x.decay))),venue_blend:med(cfgs.map(x=>Number(x.venue_blend))),prior_matches:med(cfgs.map(x=>Number(x.prior_matches??3)))};
+   const mean=deltas.reduce((a,v)=>a+v,0)/deltas.length;
+   if(mean<0){MODEL_HISTORY_WINDOW=candidate.window;MODEL_DECAY=candidate.decay;MODEL_VENUE_BLEND=candidate.venue_blend;MODEL_PRIOR_MATCHES=candidate.prior_matches;job.status="promoted";job.candidate_config=candidate;}
+   else{job.status="rejected";job.candidate_config=candidate;}
+   job.mean_test_brier_delta=Number(mean.toFixed(5));job.note=mean<0?"Promosso: Brier medio del test inferiore al baseline.":"Rifiutato: test non migliorato rispetto al baseline.";
+  }else{job.status="insufficient_data";job.note="Servono almeno tre campionati validi; parametri invariati.";}
+ }catch(e){job.status="failed";job.error=e.message;}
+ job.finished_at=new Date().toISOString();job.active_config={window:MODEL_HISTORY_WINDOW,decay:MODEL_DECAY,venue_blend:MODEL_VENUE_BLEND,prior_matches:MODEL_PRIOR_MATCHES};
+ automaticLearningLastRun=job.finished_at;automaticLearningLastReport=job;return job;
+}
+app.post("/api/model/learning/run",requireAccess,requireSportApi,requireDatabase,(req,res)=>{
+ if(automaticLearningJob?.status==="running")return res.status(409).json({ok:false,message:"Apprendimento già in corso."});
+ runAutomaticLearning().catch(e=>console.error("Auto-learning:",e.message));
+ res.json({ok:true,started:true,job_id:automaticLearningJob?.id});
+});
+app.get("/api/model/learning/status",requireAccess,requireDatabase,(req,res)=>res.json({ok:true,running:automaticLearningJob?.status==="running",last_run:automaticLearningLastRun,job:automaticLearningLastReport,active_config:{window:MODEL_HISTORY_WINDOW,decay:MODEL_DECAY,venue_blend:MODEL_VENUE_BLEND,prior_matches:MODEL_PRIOR_MATCHES},note:"Parametri runtime: si ricostruiscono dopo riavvio tramite job automatico."}));
 // ==========================================
 // VALIDAZIONE MULTI-CAMPIONATO IN BACKGROUND
 // Job singleton: esecuzione sequenziale, retry, stato e risultati in memoria.
@@ -5721,12 +5762,16 @@ const AUTOMATIC_RESULTS_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
 app.listen(PORT, () => {
   console.log(`Football Predictor Server attivo sulla porta ${PORT}`);
   setTimeout(() => {
+    runAutomaticLearning().catch(error => console.error("Auto-learning iniziale:", error.message));
     runAutomaticResultsSync().catch(error =>
       console.error("Avvio sync automatica non riuscito:", error.message)
     ).finally(() => runAutomaticStatisticsSync().catch(error =>
       console.error("Avvio backfill statistiche non riuscito:", error.message)
     ));
   }, 60 * 1000);
+  setInterval(() => {
+    runAutomaticLearning().catch(error => console.error("Auto-learning periodico:", error.message));
+  }, 24 * 60 * 60 * 1000);
   setInterval(() => {
     runAutomaticResultsSync().catch(error =>
       console.error("Sync periodica non riuscita:", error.message)
