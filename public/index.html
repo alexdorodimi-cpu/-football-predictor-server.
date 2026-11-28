@@ -360,7 +360,7 @@ button.full{width:100%}
    <small>Fino a 1.000 partite · progressi live</small>
   </div>
   <label>Campionato da testare</label>
-  <select id="backtestLeague"><option value="all">Seleziona un campionato</option></select>
+  <select id="backtestLeague"><option value="all" selected>Tutti i campionati</option></select>
   <label>Stagione</label>
   <select id="backtestSeason">
    <option value="2026/2027" selected>2026/2027</option>
@@ -934,13 +934,13 @@ async function startExtendedBacktest(){
  const batch=document.getElementById("backtestBatchSize").value;
  const button=document.getElementById("startBacktestButton");
  const progress=document.getElementById("backtestProgress");
- if(!league||league==="all"){progress.textContent="Seleziona un campionato.";return;}
+ if(!league){progress.textContent="Seleziona un campionato.";return;}
  button.disabled=true;button.textContent="AVVIO...";
  document.getElementById("backtestResults").innerHTML="";
  progress.textContent="Avvio backtest...";
  try{
   const token=(tokenInput.value||localStorage.getItem("predictor_token")||"").trim();if(!token)throw new Error("Inserisci prima il token.");
-  const url="/api/backtest/bulk/start/"+encodeURIComponent(league)+"?season="+encodeURIComponent(season)+"&matches="+encodeURIComponent(matches)+"&batch_size="+encodeURIComponent(batch);
+  const url="/api/backtest/bulk/start/"+encodeURIComponent(league)+"?season="+encodeURIComponent(season)+"&matches="+encodeURIComponent(matches)+"&batch_size="+encodeURIComponent(batch)+(league==="all"?"&all_leagues=true":"");
   const response=await fetch(url,{method:"POST",headers:{Authorization:"Bearer "+token}});
   const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||"Avvio backtest fallito");
   window.extendedBacktestJobId=data.job_id;
