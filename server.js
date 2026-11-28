@@ -2690,42 +2690,67 @@ async function runBulkBacktestJob(job) {
   const baseUrl = `http://127.0.0.1:${PORT}`;
   try {
     const leagues = job.allLeagues ? job.leagues : [{id:job.leagueId,name:job.leagueName||job.leagueId}];
-    for (const league of leagues) {
-      if (job.completedLeagues?.includes(String(league.id))) continue;
+    const offsets = new Map(leagues.map(l => [String(l.id), 0]));
+    const exhausted = new Set();
+    let cursor = 0;
+    // Distribuzione round-robin: nessun limite artificiale per singolo campionato.
+    // I campionati senza partite valutabili vengono segnati esauriti e non contano come blocchi.
+    while (job.completedMatches < job.maxMatches && exhausted.size < leagues.length) {
+      const league = leagues[cursor % leagues.length];
+      cursor++;
+      const leagueId = String(league.id);
+      if (exhausted.has(leagueId)) continue;
       job.current_league = league.name;
-      let leagueOffset = 0;
-      const perLeagueLimit = job.allLeagues ? Math.max(1, Math.ceil(job.maxMatches / leagues.length)) : job.maxMatches;
-      while (leagueOffset < perLeagueLimit && job.completedMatches < job.maxMatches) {
-        const remaining = job.maxMatches - job.completedMatches;
-        const batch = Math.min(job.batchSize, remaining, perLeagueLimit - leagueOffset);
-        const url = new URL(`/api/backtest/${encodeURIComponent(league.id)}`, baseUrl);
-        url.searchParams.set("limit", String(batch));
-        url.searchParams.set("offset", String(leagueOffset));
-        if (job.allSeasons) url.searchParams.set("all_seasons", "true");
-        else url.searchParams.set("season", job.season);
-        url.searchParams.set("include_stats", "true");
-        url.searchParams.set("stats_limit", String(batch));
-        url.searchParams.set("summary", "true");
-        const response = await fetch(url, {headers:{Authorization:`Bearer ${ACCESS_TOKEN}`,Accept:"application/json"},signal:AbortSignal.timeout(180000)});
-        const raw=await response.text(); let data;
-        try{data=JSON.parse(raw);}catch{throw new Error(`Risposta non JSON per ${league.name}, offset ${leagueOffset}.`);}
-        if(!response.ok||data?.ok!==true)throw new Error(`${league.name}: HTTP ${response.status} - ${data?.error||"errore backtest"}`);
+      const offset = offsets.get(leagueId) || 0;
+      const remaining = job.maxMatches - job.completedMatches;
+      const batch = Math.min(job.batchSize, remaining);
+      const url = new URL(`/api/backtest/${encodeURIComponent(leagueId)}`, baseUrl);
+      url.searchParams.set("limit", String(batch));
+      url.searchParams.set("offset", String(offset));
+      if (job.allSeasons) url.searchParams.set("all_seasons", "true");
+      else url.searchParams.set("season", job.season);
+      url.searchParams.set("include_stats", "true");
+      url.searchParams.set("stats_limit", String(batch));
+      url.searchParams.set("summary", "true");
+      const response = await fetch(url, {headers:{Authorization:`Bearer ${ACCESS_TOKEN}`,Accept:"application/json"},signal:AbortSignal.timeout(180000)});
+      const raw = await response.text(); let data;
+      try { data = JSON.parse(raw); } catch { throw new Error(`Risposta non JSON per ${league.name}, offset ${offset}.`); }
+      if (!response.ok || data?.ok !== true) throw new Error(`${league.name}: HTTP ${response.status} - ${data?.error||"errore backtest"}`);
+      const selected = Number(data.evaluation_matches_selected || 0);
+      const evaluated = Number(data.evaluated_matches || 0);
+      const nextOffset = Number(data.next_offset ?? offset + selected);
+      if (selected > 0 || evaluated > 0) {
         aggregateBulkMarket(aggregateStats,data.statistical_accuracy_by_market);
         aggregateBulkMarket(aggregateGoals,data.accuracy_by_market);
-        const statRows=Object.entries(data.statistical_accuracy_by_market||{}).filter(([,m])=>m.beats_majority_baseline===true&&Number(m.positive_actual||0)>=4&&Number(m.negative_actual||0)>=4&&Number.isFinite(Number(m.balanced_accuracy_percent))).sort((a,b)=>Number(b[1].balanced_accuracy_percent)-Number(a[1].balanced_accuracy_percent)).slice(0,15).map(([market,metric])=>({market,...metric}));
-        job.blocks.push({block:job.blocks.length+1,league_id:String(league.id),league_name:league.name,offset:leagueOffset,matches_selected:Number(data.evaluation_matches_selected||0),matches_evaluated:Number(data.evaluated_matches||0),period:data.evaluation_period||null,accuracy_by_market:data.accuracy_by_market||{},advanced_metrics:data.advanced_metrics||{},statistical_matches:Number(data.statistical_backtest?.evaluated_matches||0),statistical_markets_count:Object.keys(data.statistical_accuracy_by_market||{}).length,top_statistical_markets:statRows});
-        const evaluated=Number(data.evaluated_matches||0);
-        job.completedMatches+=evaluated;job.completedBlocks=job.blocks.length;leagueOffset=Number(data.next_offset??leagueOffset+batch);job.nextOffset=leagueOffset;job.updatedAt=new Date().toISOString();
-        if(data.done||!data.evaluation_matches_selected)break;
+        const statRows=Object.entries(data.statistical_accuracy_by_market||{})
+          .filter(([,m])=>m.beats_majority_baseline===true&&Number(m.positive_actual||0)>=4&&Number(m.negative_actual||0)>=4&&Number.isFinite(Number(m.balanced_accuracy_percent)))
+          .sort((a,b)=>Number(b[1].balanced_accuracy_percent)-Number(a[1].balanced_accuracy_percent)).slice(0,15)
+          .map(([market,metric])=>({market,...metric}));
+        job.blocks.push({block:job.blocks.length+1,league_id:leagueId,league_name:league.name,offset,
+          matches_selected:selected,matches_evaluated:evaluated,period:data.evaluation_period||null,
+          accuracy_by_market:data.accuracy_by_market||{},advanced_metrics:data.advanced_metrics||{},
+          statistical_matches:Number(data.statistical_backtest?.evaluated_matches||0),
+          statistical_markets_count:Object.keys(data.statistical_accuracy_by_market||{}).length,
+          top_statistical_markets:statRows});
+        job.completedMatches+=evaluated;
+        job.completedBlocks=job.blocks.length;
       }
-      job.completedLeagues.push(String(league.id));
+      offsets.set(leagueId,nextOffset);
+      job.nextOffset=nextOffset;
       job.updatedAt=new Date().toISOString();
-      if(job.completedMatches>=job.maxMatches)break;
+      if (data.done || selected===0 || nextOffset<=offset) exhausted.add(leagueId);
+      if (exhausted.has(leagueId) && !job.completedLeagues.includes(leagueId)) job.completedLeagues.push(leagueId);
     }
-    job.result={ok:true,league_id:job.allLeagues?"ALL":job.leagueId,league_count:job.allLeagues?job.leagues.length:1,leagues_tested:job.completedLeagues,season:job.allSeasons?"ALL":job.season,all_seasons:job.allSeasons,all_leagues:job.allLeagues,requested_matches_max:job.maxMatches,batch_size:job.batchSize,blocks_completed:job.blocks.length,evaluated_matches:job.completedMatches,statistical_markets_aggregated:finalizeBulkMarkets(aggregateStats),goal_markets_aggregated:finalizeBulkMarkets(aggregateGoals),blocks:job.blocks,completed_at:new Date().toISOString(),notes:["Test globale su tutti i campionati del catalogo europeo. I risultati sono aggregati e ogni blocco conserva il campionato di origine.","Balanced accuracy e baseline maggioritaria sono più informative della sola accuracy per mercati sbilanciati."]};
+    job.result={ok:true,league_id:job.allLeagues?"ALL":job.leagueId,league_count:job.allLeagues?job.leagues.length:1,
+      leagues_tested:job.completedLeagues,season:job.allSeasons?"ALL":job.season,all_seasons:job.allSeasons,
+      all_leagues:job.allLeagues,requested_matches_max:job.maxMatches,batch_size:job.batchSize,
+      blocks_completed:job.blocks.length,evaluated_matches:job.completedMatches,
+      statistical_markets_aggregated:finalizeBulkMarkets(aggregateStats),goal_markets_aggregated:finalizeBulkMarkets(aggregateGoals),
+      blocks:job.blocks,completed_at:new Date().toISOString(),
+      notes:["Backtest globale round-robin: i campionati vengono interrogati fino a esaurimento o al raggiungimento del target di partite valutate.","I blocchi vuoti non vengono conteggiati. Balanced accuracy e baseline maggioritaria sono più informative della sola accuracy per mercati sbilanciati."]};
     job.status="completed";
-  }catch(error){job.status="failed";job.error=error.message;}
-  finally{job.updatedAt=new Date().toISOString();}
+  } catch(error) { job.status="failed"; job.error=error.message; }
+  finally { job.updatedAt=new Date().toISOString(); }
 }
 
 app.post("/api/backtest/bulk/start/:leagueId", requireDatabase, async (req,res) => {
