@@ -1280,6 +1280,32 @@ async function loadMatches(){
    '<div class="empty">Impossibile caricare le partite: '+escapeHtml(e.message)+'</div>';
  }
 }
+
+// Feedback immediato e gestione visibile dei pulsanti principali.
+const searchButton=[...document.querySelectorAll("button")].find(b=>b.textContent.trim()==="CERCA PARTITE");
+if(searchButton){
+ searchButton.onclick=async()=>{
+  searchButton.disabled=true;
+  searchButton.textContent="RICERCA...";
+  message.textContent="⏳ Richiesta partita inviata...";
+  try{await loadMatches();}
+  catch(e){message.textContent="❌ Ricerca fallita: "+(e.message||e);}
+  finally{searchButton.disabled=false;searchButton.textContent="CERCA PARTITE";}
+ };
+}
+const multipleButton=document.getElementById("generateMultiplesButton");
+if(multipleButton){
+ multipleButton.onclick=async()=>{
+  multipleButton.disabled=true;
+  multipleButton.textContent="GENERAZIONE...";
+  const resultBox=document.getElementById("multipleResult");
+  if(resultBox)resultBox.innerHTML='<div class="loading">⏳ Richiesta multipla inviata: sto analizzando partite e mercati...</div>';
+  try{await generateMultiples();}
+  catch(e){if(resultBox)resultBox.innerHTML='<div class="empty">❌ Generazione fallita: '+escapeHtml(e.message||e)+'</div>';}
+  finally{multipleButton.disabled=false;multipleButton.textContent="GENERA MULTIPLA";}
+ };
+}
+
 </script>
 </body>
 </html>
