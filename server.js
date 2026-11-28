@@ -3366,17 +3366,36 @@ app.get(
             return { evaluated: 0, correct: 0, accuracy: null, brier_score: null, calibration: [] };
           }
 
-          let hits = 0;
-          let brier = 0;
+          let tp = 0, tn = 0, fp = 0, fn = 0, brier = 0;
           for (const item of tested) {
-            if ((item.probability >= 0.5) === Boolean(item.actual)) hits++;
+            const predicted = item.probability >= 0.5;
+            const actual = Boolean(item.actual);
+            if (predicted && actual) tp++;
+            else if (!predicted && !actual) tn++;
+            else if (predicted && !actual) fp++;
+            else fn++;
             brier += Math.pow(item.probability - item.actual, 2);
           }
+          const evaluated = tested.length;
+          const sensitivity = tp + fn ? tp / (tp + fn) : null;
+          const specificity = tn + fp ? tn / (tn + fp) : null;
+          const balancedAccuracy = sensitivity !== null && specificity !== null ? (sensitivity + specificity) / 2 : null;
+          const positiveActual = tp + fn, negativeActual = tn + fp;
+          const baseline = Math.max(positiveActual, negativeActual) / evaluated;
+          const hits = tp + tn;
           return {
-            evaluated: tested.length,
+            evaluated,
             correct: hits,
-            accuracy: Number((hits / tested.length * 100).toFixed(2)),
-            brier_score: Number((brier / tested.length).toFixed(4)),
+            accuracy: Number((hits / evaluated * 100).toFixed(2)),
+            positive_actual: positiveActual,
+            negative_actual: negativeActual,
+            true_positive: tp, true_negative: tn, false_positive: fp, false_negative: fn,
+            sensitivity_percent: sensitivity === null ? null : Number((sensitivity * 100).toFixed(2)),
+            specificity_percent: specificity === null ? null : Number((specificity * 100).toFixed(2)),
+            balanced_accuracy_percent: balancedAccuracy === null ? null : Number((balancedAccuracy * 100).toFixed(2)),
+            majority_baseline_accuracy_percent: Number((baseline * 100).toFixed(2)),
+            beats_majority_baseline: hits / evaluated > baseline,
+            brier_score: Number((brier / evaluated).toFixed(4)),
             calibration: calibrationByBands(tested)
           };
         };
