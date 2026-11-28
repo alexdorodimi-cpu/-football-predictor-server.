@@ -332,7 +332,7 @@ button.full{width:100%}
   </div>
   <label>Token di accesso personale</label>
   <input id="token" type="password" placeholder="Inserisci il tuo access token">
-  <button id="saveTokenButton" class="full" type="button" onclick="saveToken()">SALVA ACCESSO</button>
+  <button id="saveTokenButton" class="full" type="button" onclick="window.saveTokenFallback()">SALVA ACCESSO</button>
   <p class="muted">La chiave API PitchAPI rimane protetta sul server.</p>
  </div>
 
@@ -403,6 +403,43 @@ button.full{width:100%}
 </div>
 
 <script>
+/* Fallback indipendente dal main script: salva e verifica il token anche se il JS principale ha un errore. */
+window.saveTokenFallback = async function(){
+ const input=document.getElementById("token");
+ const msg=document.getElementById("message");
+ const btn=document.getElementById("saveTokenButton");
+ const token=(input&&input.value||"").trim();
+ if(!token){if(msg)msg.textContent="⚠️ Inserisci il token.";return;}
+ try{
+  localStorage.setItem("predictor_token",token);
+  if(localStorage.getItem("predictor_token")!==token)throw new Error("Il browser non conferma il salvataggio.");
+  if(msg)msg.textContent="✅ Token salvato localmente. Verifica server in corso...";
+  if(btn){btn.disabled=true;btn.textContent="VERIFICA...";}
+  const d=await fetch("/api/auth-diagnostic",{headers:{Authorization:"Bearer "+token},cache:"no-store"});
+  const diag=await d.json();
+  if(!d.ok||!diag.ok)throw new Error("Diagnostica server non disponibile (HTTP "+d.status+").");
+  if(!diag.serverTokenConfigured)throw new Error("Token salvato, ma il token server non è configurato su Render.");
+  if(!diag.tokenMatchesServer)throw new Error("Token salvato, ma non corrisponde al token di Render.");
+  const r=await fetch("/api/leagues",{headers:{Authorization:"Bearer "+token},cache:"no-store"});
+  const data=await r.json();
+  if(!r.ok||data.ok===false)throw new Error(data.error||"Accesso API non riuscito (HTTP "+r.status+").");
+  const leagues=data?.response?.data?.leagues||data?.data?.leagues||data?.leagues||[];
+  const select=document.getElementById("league");
+  if(select&&Array.isArray(leagues)){
+   select.innerHTML='<option value="all">Tutti i campionati</option>';
+   leagues.forEach(l=>{if(!l.id)return;const o=document.createElement("option");o.value=l.id;o.textContent=(l.name||l.league_name||"Campionato")+" ("+(l.country_code||l.country?.code||"")+")";select.appendChild(o);});
+   const ms=document.getElementById("multipleLeague");if(ms)ms.innerHTML=select.innerHTML;
+   const count=document.getElementById("leagueCount");if(count)count.textContent=Math.max(0,select.options.length-1);
+  }
+  if(msg)msg.textContent="✅ Token salvato e verificato. Server collegato"+(Array.isArray(leagues)?" — "+leagues.length+" campionati":"")+".";
+ }catch(e){
+  if(msg)msg.textContent="❌ "+(e&&e.message||e);
+ }finally{
+  if(btn){btn.disabled=false;btn.textContent="SALVA ACCESSO";}
+ }
+};
+</script>
+<script>
 const tokenInput=document.getElementById("token");
 const message=document.getElementById("message");
 const matchesBox=document.getElementById("matches");
@@ -438,7 +475,7 @@ function saveToken(){
 }
 
 async function api(path){
- const token=(localStorage.getItem("predictor_token")||tokenInput.value||"").trim();
+ const token=(tokenInput.value||localStorage.getItem("predictor_token")||"").trim();
  if(!token) throw new Error("Inserisci prima il token di accesso.");
  localStorage.setItem("predictor_token",token);
 
