@@ -3445,18 +3445,28 @@ app.get(
         const tn = evaluated - tp - fp - fn;
         const support = tp + fn;
         const predictedCount = tp + fp;
+        const negativeActual = tn + fp;
         const precision = predictedCount ? tp / predictedCount : null;
         const recall = support ? tp / support : null;
-        const specificity = tn + fp ? tn / (tn + fp) : null;
+        const specificity = negativeActual ? tn / negativeActual : null;
+        const oneVsRestAccuracy = evaluated ? (tp + tn) / evaluated : null;
+        const balancedAccuracy = recall !== null && specificity !== null ? (recall + specificity) / 2 : null;
+        const majorityBaseline = evaluated ? Math.max(support, negativeActual) / evaluated : null;
         outcomeMetrics[outcome] = {
           evaluated,
-          correct: tp,
+          correct: tp + tn,
           support,
+          positive_actual: support,
+          negative_actual: negativeActual,
           predicted: predictedCount,
-          accuracy: recall === null ? null : Number((recall * 100).toFixed(2)),
+          accuracy: oneVsRestAccuracy === null ? null : Number((oneVsRestAccuracy * 100).toFixed(2)),
           precision_percent: precision === null ? null : Number((precision * 100).toFixed(2)),
           recall_percent: recall === null ? null : Number((recall * 100).toFixed(2)),
+          sensitivity_percent: recall === null ? null : Number((recall * 100).toFixed(2)),
           specificity_percent: specificity === null ? null : Number((specificity * 100).toFixed(2)),
+          balanced_accuracy_percent: balancedAccuracy === null ? null : Number((balancedAccuracy * 100).toFixed(2)),
+          majority_baseline_accuracy_percent: majorityBaseline === null ? null : Number((majorityBaseline * 100).toFixed(2)),
+          beats_majority_baseline: oneVsRestAccuracy !== null && majorityBaseline !== null && oneVsRestAccuracy > majorityBaseline,
           true_positive: tp, true_negative: tn, false_positive: fp, false_negative: fn
         };
       }
