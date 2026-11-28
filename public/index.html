@@ -354,6 +354,37 @@ button.full{width:100%}
   <p id="message" class="status">● Pronto per caricare le partite.</p>
  </div>
 
+ <div class="panel" id="extendedBacktestPanel">
+  <div class="panel-heading">
+   <h2>🧪 Backtest esteso</h2>
+   <small>Fino a 1.000 partite · progressi live</small>
+  </div>
+  <label>Campionato da testare</label>
+  <select id="backtestLeague"><option value="all">Seleziona un campionato</option></select>
+  <label>Stagione</label>
+  <select id="backtestSeason">
+   <option value="2026/2027" selected>2026/2027</option>
+   <option value="2025/2026">2025/2026</option>
+   <option value="2024/2025">2024/2025</option>
+   <option value="2023/2024">2023/2024</option>
+   <option value="2022/2023">2022/2023</option>
+   <option value="2021/2022">2021/2022</option>
+  </select>
+  <label>Numero massimo di partite</label>
+  <select id="backtestMatches">
+   <option value="250">250</option><option value="500">500</option><option value="750">750</option><option value="1000" selected>1.000</option>
+  </select>
+  <label>Dimensione blocchi</label>
+  <select id="backtestBatchSize"><option value="10">10 (più dettagliato)</option><option value="20" selected>20</option></select>
+  <div class="row">
+   <button id="startBacktestButton" onclick="startExtendedBacktest()">AVVIA BACKTEST</button>
+   <button class="secondary" id="resumeBacktestButton" onclick="resumeExtendedBacktest()" style="display:none">RIPRENDI MONITORAGGIO</button>
+  </div>
+  <div id="backtestProgress" style="margin-top:14px"></div>
+  <div id="backtestResults" style="margin-top:14px"></div>
+  <p class="muted">Il test è diagnostico: non modifica né attiva automaticamente il modello in produzione. Le metriche avanzate includono balanced accuracy, baseline maggioritaria, sensibilità, specificità e Brier score quando disponibili.</p>
+ </div>
+
  <div class="panel">
   <div class="panel-heading">
    <h2>🎯 Generatore Multiple AI</h2>
@@ -533,6 +564,7 @@ async function checkServer(){
    select.appendChild(option);
   });
 
+  const backtestSelect=document.getElementById("backtestLeague");if(backtestSelect)backtestSelect.innerHTML=select.innerHTML;
   const multipleSelect=document.getElementById("multipleLeague");
   multipleSelect.innerHTML=select.innerHTML;
   document.getElementById("leagueCount").textContent=select.options.length-1;
@@ -844,6 +876,88 @@ async function generateMultiples(){
  }
 }
 
+
+const EXTENDED_BACKTEST_STORAGE_KEY="football_predictor_extended_backtest_job";
+let extendedBacktestPollTimer=null;
+function backtestProgressMarkup(job){
+ const pct=job.expected_blocks?Math.min(100,Math.round((job.completed_blocks||0)/job.expected_blocks*100)):0;
+ return '<div class="match"><strong>Backtest '+escapeHtml(job.status||"in corso")+'</strong><div class="muted">Blocchi: '+(job.completed_blocks||0)+' / '+(job.expected_blocks||"—")+' · Partite valutate: '+(job.completed_matches||0)+' · Offset: '+(job.next_offset||0)+'</div><div style="height:10px;background:#26372c;border-radius:8px;overflow:hidden;margin:12px 0"><div style="height:100%;width:'+pct+'%;background:var(--green);transition:width .3s"></div></div><strong>'+pct+'%</strong>'+(job.error?'<p class="predictionError">'+escapeHtml(job.error)+'</p>':'')+'</div>';
+}
+function fmtMetric(value,suffix="%"){return value===null||value===undefined||!Number.isFinite(Number(value))?"—":Number(value).toFixed(2)+suffix;}
+function renderExtendedBacktestResult(result){
+ const box=document.getElementById("backtestResults");
+ const groups=[["MERCATI GOL",result.goal_markets_aggregated||{}],["MERCATI STATISTICI",result.statistical_markets_aggregated||{}]];
+ let html='<div class="match"><h3>🏁 BACKTEST COMPLETATO</h3><div class="muted">Partite valutate: <strong>'+Number(result.evaluated_matches||0)+'</strong> · Blocchi completati: '+Number(result.blocks_completed||0)+' · Stagione: '+escapeHtml(result.season||"")+'</div></div>';
+ for(const [heading,markets] of groups){
+  const entries=Object.entries(markets);
+  if(!entries.length)continue;
+  html+='<div class="sectionTitle">'+heading+'</div>';
+  html+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr><th style="text-align:left;padding:8px">Mercato</th><th>Campione</th><th>Accuracy</th><th>Balanced</th><th>Baseline</th><th>Brier</th><th>Sens.</th><th>Spec.</th></tr></thead><tbody>';
+  entries.sort((a,b)=>(Number(b[1].balanced_accuracy_percent||0)-Number(a[1].balanced_accuracy_percent||0))).forEach(([name,m])=>{
+   html+='<tr style="border-top:1px solid var(--border)"><td style="padding:8px">'+escapeHtml(name)+'</td><td style="text-align:center">'+(m.evaluated||0)+'</td><td style="text-align:center;color:var(--green)">'+fmtMetric(m.accuracy_percent)+'</td><td style="text-align:center">'+fmtMetric(m.balanced_accuracy_percent)+'</td><td style="text-align:center">'+fmtMetric(m.majority_baseline_accuracy_percent)+'</td><td style="text-align:center">'+fmtMetric(m.brier_score,"")+'</td><td style="text-align:center">'+fmtMetric(m.sensitivity_percent)+'</td><td style="text-align:center">'+fmtMetric(m.specificity_percent)+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+ }
+ if(Array.isArray(result.notes)&&result.notes.length)html+='<div class="help-note">'+result.notes.map(escapeHtml).join("<br>")+'</div>';
+ html+='<button class="secondary full" onclick="downloadExtendedBacktestResult()">SCARICA REPORT JSON</button>';
+ box.innerHTML=html;
+ try{localStorage.setItem(EXTENDED_BACKTEST_STORAGE_KEY,JSON.stringify({result,job_id:window.extendedBacktestJobId}));}catch(e){}
+}
+window.extendedBacktestJobId=null;
+async function pollExtendedBacktest(jobId){
+ const progress=document.getElementById("backtestProgress");
+ const resume=document.getElementById("resumeBacktestButton");
+ try{
+  const token=(tokenInput.value||localStorage.getItem("predictor_token")||"").trim();
+  const r=await fetch("/api/backtest/bulk/"+encodeURIComponent(jobId),{headers:{Authorization:"Bearer "+token}});
+  const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||"Errore monitoraggio job");
+  progress.innerHTML=backtestProgressMarkup(j);
+  if(j.status==="completed"){
+   clearInterval(extendedBacktestPollTimer);extendedBacktestPollTimer=null;
+   const rr=await fetch("/api/backtest/bulk/"+encodeURIComponent(jobId)+"/result",{headers:{Authorization:"Bearer "+token}});
+   const data=await rr.json();if(!rr.ok||!data.ok)throw new Error(data.error||"Report non disponibile");
+   renderExtendedBacktestResult(data);if(resume)resume.style.display="none";return;
+  }
+  if(j.status==="failed"){clearInterval(extendedBacktestPollTimer);extendedBacktestPollTimer=null;progress.innerHTML=backtestProgressMarkup(j);return;}
+  if(resume)resume.style.display="inline-block";
+ }catch(e){progress.innerHTML='<div class="predictionError">Errore monitoraggio: '+escapeHtml(e.message)+'</div>';if(resume)resume.style.display="inline-block";}
+}
+function resumeExtendedBacktest(){
+ const id=window.extendedBacktestJobId||(()=>{try{return JSON.parse(localStorage.getItem(EXTENDED_BACKTEST_STORAGE_KEY)||"{}").job_id;}catch(e){return null;}})();
+ if(!id){document.getElementById("backtestProgress").textContent="Nessun job salvato da riprendere.";return;}
+ window.extendedBacktestJobId=id;clearInterval(extendedBacktestPollTimer);pollExtendedBacktest(id);extendedBacktestPollTimer=setInterval(()=>pollExtendedBacktest(id),3000);
+}
+async function startExtendedBacktest(){
+ const league=document.getElementById("backtestLeague").value;
+ const season=document.getElementById("backtestSeason").value;
+ const matches=document.getElementById("backtestMatches").value;
+ const batch=document.getElementById("backtestBatchSize").value;
+ const button=document.getElementById("startBacktestButton");
+ const progress=document.getElementById("backtestProgress");
+ if(!league||league==="all"){progress.textContent="Seleziona un campionato.";return;}
+ button.disabled=true;button.textContent="AVVIO...";
+ document.getElementById("backtestResults").innerHTML="";
+ progress.textContent="Avvio backtest...";
+ try{
+  const token=(tokenInput.value||localStorage.getItem("predictor_token")||"").trim();if(!token)throw new Error("Inserisci prima il token.");
+  const url="/api/backtest/bulk/start/"+encodeURIComponent(league)+"?season="+encodeURIComponent(season)+"&matches="+encodeURIComponent(matches)+"&batch_size="+encodeURIComponent(batch);
+  const response=await fetch(url,{method:"POST",headers:{Authorization:"Bearer "+token}});
+  const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||"Avvio backtest fallito");
+  window.extendedBacktestJobId=data.job_id;
+  try{localStorage.setItem(EXTENDED_BACKTEST_STORAGE_KEY,JSON.stringify({job_id:data.job_id,league,season,matches,batch}));}catch(e){}
+  progress.innerHTML='<div class="status">Job avviato: '+escapeHtml(data.job_id)+' · '+Number(data.expected_blocks||0)+' blocchi previsti.</div>';
+  clearInterval(extendedBacktestPollTimer);pollExtendedBacktest(data.job_id);extendedBacktestPollTimer=setInterval(()=>pollExtendedBacktest(data.job_id),3000);
+ }catch(e){progress.innerHTML='<div class="predictionError">'+escapeHtml(e.message)+'</div>';}
+ finally{button.disabled=false;button.textContent="AVVIA BACKTEST";}
+}
+function downloadExtendedBacktestResult(){
+ try{
+  const saved=JSON.parse(localStorage.getItem(EXTENDED_BACKTEST_STORAGE_KEY)||"{}");
+  if(!saved.result){alert("Report non ancora disponibile.");return;}
+  const blob=new Blob([JSON.stringify(saved.result,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="football-predictor-backtest-report.json";a.click();URL.revokeObjectURL(url);
+ }catch(e){alert("Impossibile scaricare report: "+e.message);}
+}
 
 async function runModelOptimizer(){
  const leagueId=document.getElementById("league").value;
